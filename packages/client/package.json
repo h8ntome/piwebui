@@ -1,0 +1,29 @@
+{
+  "name": "@pi-web/client",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build && tsc -p tsconfig.json --noEmit",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@pi-web/shared": "*",
+    "dompurify": "3.2.4",
+    "highlight.js": "11.11.1",
+    "lucide-react": "0.545.0",
+    "marked": "15.0.12",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "zustand": "5.0.8"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "4.3.4",
+    "@types/react": "19.1.8",
+    "@types/react-dom": "19.1.6",
+    "@vitejs/plugin-react": "4.5.2",
+    "tailwindcss": "4.3.4",
+    "vite": "7.1.11"
+  }
+}

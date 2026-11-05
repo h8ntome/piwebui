@@ -1,0 +1,360 @@
+{
+  "generatedAt": "2026-11-05T15:40:47.918Z",
+  "piVersion": "1.5.0",
+  "rows": [
+    {
+      "id": "S-1",
+      "name": "read parity+no-mutation: v3-current",
+      "status": "PASS",
+      "evidence": "ids=true untouched=true branch=true proj=true (v3-current)"
+    },
+    {
+      "id": "S-1",
+      "name": "read parity+no-mutation: v3-branched",
+      "status": "PASS",
+      "evidence": "ids=true untouched=true branch=true proj=true (v3-branched)"
+    },
+    {
+      "id": "S-1",
+      "name": "read parity+no-mutation: legacy-v2",
+      "status": "PASS",
+      "evidence": "ids=true untouched=true branch=true proj=true (legacy-v2)"
+    },
+    {
+      "id": "S-1",
+      "name": "read parity+no-mutation: invalid-tail",
+      "status": "PASS",
+      "evidence": "ids=true untouched=true branch=true proj=true (invalid-tail)"
+    },
+    {
+      "id": "S-1b",
+      "name": "empty file untouched",
+      "status": "PASS",
+      "evidence": "size/hash unchanged after pure read"
+    },
+    {
+      "id": "D-05",
+      "name": "pi SessionManager.open rewrites empty (why we never open originals)",
+      "status": "PASS",
+      "evidence": "open(copy).size=151 — proves the pure-read rule"
+    },
+    {
+      "id": "F-10",
+      "name": "invalid complete lines produce diagnostics, source untouched",
+      "status": "PASS",
+      "evidence": "2 diagnostics"
+    },
+    {
+      "id": "S-12g",
+      "name": "giant single record parsed with bound",
+      "status": "PASS",
+      "evidence": "2 entries in 8ms"
+    },
+    {
+      "id": "RR-framing",
+      "name": "U+2028/U+2029 survive LF framing",
+      "status": "PASS",
+      "evidence": "line separator chars preserved in parsed record"
+    },
+    {
+      "id": "S-1c",
+      "name": "legacy v2 projection parity",
+      "status": "PASS",
+      "evidence": "2 messages"
+    },
+    {
+      "id": "P0-B1",
+      "name": "managed host boots with real Pi SDK",
+      "status": "PASS",
+      "evidence": "piVersion=1.5.0 pid=54834"
+    },
+    {
+      "id": "P0-B2",
+      "name": "managed snapshot (idle, caps)",
+      "status": "PASS",
+      "evidence": "phase=idle"
+    },
+    {
+      "id": "P0-B3",
+      "name": "prompt dispatch ack before completion (preflightResult)",
+      "status": "PASS",
+      "evidence": "{\"invoked\":true,\"disposition\":\"started\"}"
+    },
+    {
+      "id": "C-3",
+      "name": "mid-run snapshot has cumulative in-flight preview",
+      "status": "PASS",
+      "evidence": "previews=1"
+    },
+    {
+      "id": "P0-B4",
+      "name": "live message previews streamed",
+      "status": "PASS",
+      "evidence": "3 message_update events"
+    },
+    {
+      "id": "RR-4",
+      "name": "turn_end maps live message to persisted entry id",
+      "status": "PASS",
+      "evidence": "entryId=1a787cb3"
+    },
+    {
+      "id": "P0-B5",
+      "name": "mock reply persisted",
+      "status": "PASS",
+      "evidence": ""
+    },
+    {
+      "id": "P0-B6",
+      "name": "busy start rejected (never silently converted)",
+      "status": "PASS",
+      "evidence": "cmd prompt(start) while streaming -> busy"
+    },
+    {
+      "id": "P0-B7",
+      "name": "steer + followUp accepted while running",
+      "status": "PASS",
+      "evidence": "{\"invoked\":true,\"disposition\":\"queued\"} {\"invoked\":true,\"disposition\":\"queued\"}"
+    },
+    {
+      "id": "P0-B8",
+      "name": "queue introspection (managed queue_update)",
+      "status": "PASS",
+      "evidence": "count=0"
+    },
+    {
+      "id": "R-11",
+      "name": "bash cumulative snapshot policy (replace, not append)",
+      "status": "PASS",
+      "evidence": "updates=4 final=true"
+    },
+    {
+      "id": "S-7a",
+      "name": "rename via setter visible in snapshot+file",
+      "status": "PASS",
+      "evidence": ""
+    },
+    {
+      "id": "S-7b",
+      "name": "setThinking read-back (clamped level)",
+      "status": "PASS",
+      "evidence": "level=high"
+    },
+    {
+      "id": "S-7c",
+      "name": "setModel switches model",
+      "status": "PASS",
+      "evidence": "model=mock-echo-2"
+    },
+    {
+      "id": "R-10",
+      "name": "runtime context labeled honestly",
+      "status": "PASS",
+      "evidence": "runtime_preview"
+    },
+    {
+      "id": "P0-B9",
+      "name": "model catalogue secret-free",
+      "status": "PASS",
+      "evidence": "63"
+    },
+    {
+      "id": "P0-B10",
+      "name": "managed compaction: boundary appended or cleanly refused (never a hung state)",
+      "status": "PASS",
+      "evidence": "pi refused: Nothing to compact (session too small)"
+    },
+    {
+      "id": "S-8a",
+      "name": "managed dialog routed to browser channel",
+      "status": "PASS",
+      "evidence": "{\"requestId\":\"dlg-1\",\"requestGeneration\":1,\"kind\":\"confirm\",\"title\":\"Test gate\",\"message\":\"Approve the test thing?\",\"createdAt\":\"2026-11-05T"
+    },
+    {
+      "id": "S-8b",
+      "name": "one valid answer resolves dialog",
+      "status": "PASS",
+      "evidence": ""
+    },
+    {
+      "id": "S-8c",
+      "name": "duplicate answer rejected",
+      "status": "PASS",
+      "evidence": "second dialogRespond -> stale_control"
+    },
+    {
+      "id": "S-8d",
+      "name": "answer reached the Pi runtime (transformed input)",
+      "status": "PASS",
+      "evidence": "transcript contains confirm=yes"
+    },
+    {
+      "id": "R-08",
+      "name": "owner deduplicates repeated operationId",
+      "status": "PASS",
+      "evidence": "{\"invoked\":true,\"disposition\":\"queued\"}|{\"invoked\":true,\"dedup\":true}"
+    },
+    {
+      "id": "S-2/G-4",
+      "name": "stopForTerminal: settle -> dispose -> exit -> file complete",
+      "status": "PASS",
+      "evidence": "exited=true finalTurn=present; handoff: pi --session /var/folders/sg/dtjynj_90tx0_vs49z2z7t3r0000gn/T/piweb-p0-agent-5aKpJ2/sessions/b1-mw3pp3lh/2026-11-05T15-40-05-281Z_01a1ac5e-0520-71ff-9c0c-cff3fe0fe6c5.jsonl"
+    },
+    {
+      "id": "F-04",
+      "name": "managed host crash detected; file left readable",
+      "status": "PASS",
+      "evidence": "dead=true file=readable (no automatic prompt replay: server-side rule)"
+    },
+    {
+      "id": "R6-ui",
+      "name": "managed custom() reports unsupported instead of auto-approval",
+      "status": "PASS",
+      "evidence": "custom() resolves undefined + unsupported_ui event (RPC parity); never true/yes"
+    },
+    {
+      "id": "P0-C1",
+      "name": "bridge announces owner-only registry artifact",
+      "status": "PASS",
+      "evidence": "record mode 600 dir 0700 required"
+    },
+    {
+      "id": "G-3",
+      "name": "browser controls the same terminal process (PID proof)",
+      "status": "PASS",
+      "evidence": "pid 55051: pi"
+    },
+    {
+      "id": "P0-C2",
+      "name": "handshake: mode=tui, pi 1.5.0, capabilities",
+      "status": "PASS",
+      "evidence": "mode=tui v=1.5.0"
+    },
+    {
+      "id": "P0-C3",
+      "name": "bridge rejects wrong token",
+      "status": "PASS",
+      "evidence": "unauthenticated connection cut after auth failure"
+    },
+    {
+      "id": "P0-C4",
+      "name": "terminal snapshot before prompt: idle; setup-only entries (pi lazy-flushes conversation)",
+      "status": "PASS",
+      "evidence": "phase=idle entryCount=2 file=pre-created (setup entries only)"
+    },
+    {
+      "id": "P0-C5",
+      "name": "bridge prompt accepted (sendUserMessage is void; ack on invocation)",
+      "status": "PASS",
+      "evidence": "{\"invoked\":true,\"delivery\":\"start\"}"
+    },
+    {
+      "id": "C-3t",
+      "name": "mid-run terminal snapshot shows cumulative preview + streaming",
+      "status": "PASS",
+      "evidence": "previews=2"
+    },
+    {
+      "id": "P0-C6",
+      "name": "terminal session flushed; live leaf = file leaf",
+      "status": "PASS",
+      "evidence": "leaf=f4915c95 turnEnd=f4915c95"
+    },
+    {
+      "id": "P0-C7",
+      "name": "bridge-prompt turn persisted by pi itself (single writer)",
+      "status": "PASS",
+      "evidence": ""
+    },
+    {
+      "id": "P0-C8",
+      "name": "bridge busy-start rejection",
+      "status": "PASS",
+      "evidence": ""
+    },
+    {
+      "id": "P0-C9",
+      "name": "steer delivered via bridge",
+      "status": "PASS",
+      "evidence": "{\"invoked\":true,\"delivery\":\"steer\"}"
+    },
+    {
+      "id": "P0-C10",
+      "name": "abort through bridge -> agent_settled(aborted)",
+      "status": "PASS",
+      "evidence": "ctx.abort() is async; completion observed via event, not ack"
+    },
+    {
+      "id": "P0-C11",
+      "name": "snapshot reflects settled+aborted and queue flag",
+      "status": "PASS",
+      "evidence": ""
+    },
+    {
+      "id": "S-10t",
+      "name": "terminal input still works while bridged (no web fence on terminal)",
+      "status": "PASS",
+      "evidence": "input event source=interactive observed by bridge"
+    },
+    {
+      "id": "S-7",
+      "name": "rename/thinking/model reconcile in owner snapshot (thinking clamped as reported)",
+      "status": "PASS",
+      "evidence": "name=p0-terminal-name think=medium setterReported=medium model=mock-echo-2"
+    },
+    {
+      "id": "R-10t",
+      "name": "terminal runtime context labeled runtime_preview",
+      "status": "PASS",
+      "evidence": ""
+    },
+    {
+      "id": "S-6",
+      "name": "tree read from owner with live leaf source",
+      "status": "PASS",
+      "evidence": "leaf source=runtime"
+    },
+    {
+      "id": "S-13a",
+      "name": "terminal extension dialog OBSERVED through bridge (ui_prompt_start)",
+      "status": "PASS",
+      "evidence": "{\"requestId\":\"term-1\",\"requestGeneration\":2,\"kind\":\"confirm\",\"title\":\"Test gate\",\"terminalObserved\":true,\"note\":\"Answer in the terminal; remote answering is not"
+    },
+    {
+      "id": "S-13b",
+      "name": "terminal dialog REMOTE RESPONSE unsupported (documented gate)",
+      "status": "BLOCKED",
+      "evidence": "bridge error code=unsupported_capability: Terminal extension dialogs cannot be answered remotely through the public Pi extension API (ui_prompt_start/end carry no response handle). Answer in the termina"
+    },
+    {
+      "id": "S-13c",
+      "name": "answering in terminal unblocks the run (bridge observes end)",
+      "status": "PASS",
+      "evidence": "phase after in-terminal answer=idle"
+    },
+    {
+      "id": "P0-C12",
+      "name": "compact accepted async via ctx.compact",
+      "status": "PASS",
+      "evidence": "{\"started\":true}"
+    },
+    {
+      "id": "P0-C13",
+      "name": "compaction boundary persisted",
+      "status": "PASS",
+      "evidence": "short mock conversation may legitimately not compact; completion plumbing (compact_done/compacted events) exercised here and covered in server integration"
+    },
+    {
+      "id": "C-11",
+      "name": "session switch (/new) replaces runtime (extensions reload; old ctx refused)",
+      "status": "PASS",
+      "evidence": "pi reloads extension instances on session replacement; stale captured ctx correctly rejected afterwards"
+    },
+    {
+      "id": "F-18",
+      "name": "/reload replaces bridge runtime (new runtimeId; old artifacts cleaned)",
+      "status": "PASS",
+      "evidence": "old runtimeId 71fd09 gone=true"
+    }
+  ]
+}
