@@ -1,5 +1,12 @@
 # pi-web
 
+<!-- static badges only: no status badge until the GitHub repository exists, so nothing here
+     can point at a build that has never run -->
+![license](https://img.shields.io/badge/license-MIT-green.svg)
+![node](https://img.shields.io/badge/node-%3E%3D22.19-blue.svg)
+![pi](https://img.shields.io/badge/pi-1.5.0%20pinned-blueviolet.svg)
+![platforms](https://img.shields.io/badge/platforms-macOS%20%C2%B7%20Linux-lightgrey.svg)
+
 A web UI for [pi](https://npmjs.com/package/@earendil-works/pi-coding-agent): browse sessions written by the
 `pi` CLI, and drive sessions from the browser — while **pi remains the only agent runtime and the only
 writer of session files**. pi-web never executes tools, never talks to model providers, and never writes
@@ -9,13 +16,23 @@ extension) or managed `pi` SDK child processes spawned by pi-web.
 Built against **pi 1.5.0** (fail-closed: if the resolved pi version is not the validated one, all
 runtime-facing features are disabled rather than guessed at).
 
+![pi-web login screen: a single bootstrap code unlocks a loopback-only session](docs/assets/screenshot-login.png)
+
+*The real app at `127.0.0.1:4319`, before a session directory is allowlisted. Captured from a local
+build; no mockups.*
+
+> **Demo recording:** a short GIF of browsing and driving a live session is **pending**. The exact,
+> tested capture procedure (boot against a throwaway data dir, seed a fixture workspace, drive the UI,
+> frame sequence to record, encoder command) is documented in [docs/DEMO_CAPTURE.md](docs/DEMO_CAPTURE.md).
+> It is deliberately not faked with a still image.
+
 ---
 
 ## Quick start
 
 ```bash
-npm install
-npm run build          # typechecks + builds the web client
+npm ci                   # or npm install
+npm run build          # typecheck + emit workspace dist + build the client
 
 # serve on 127.0.0.1:4319 with a private metadata dir
 ./packages/server/bin/pi-web.mjs serve --data-dir ~/.pi-web
@@ -107,6 +124,17 @@ machine (the existing Paseo NetBird proxy pattern):
 
 Never expose pi-web through public ingress. pi-web refuses non-loopback binds unless you both bind
 explicitly and add the Host/Origin entries.
+
+## Where things live
+
+| Document | Contents |
+| --- | --- |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | setup, repository map, test matrix, conventions, troubleshooting |
+| [SECURITY.md](SECURITY.md) | what the server enforces, trust model, how to report a vulnerability privately |
+| [CHANGELOG.md](CHANGELOG.md) | changes, and the honest current state of each test suite |
+| [docs/CAPABILITY_MATRIX.md](docs/CAPABILITY_MATRIX.md) | every runtime claim, and whether it is verified |
+| [docs/CHECKS.md](docs/CHECKS.md) | dated checklist of what has and has not been run |
+| [docs/GITHUB_REPO_SETTINGS.md](docs/GITHUB_REPO_SETTINGS.md) | settings a maintainer must apply once, in the UI |
 
 ## Security posture (summary)
 

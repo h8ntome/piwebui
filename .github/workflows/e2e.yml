@@ -22,7 +22,7 @@ concurrency:
 
 jobs:
   smoke:
-    name: server smoke (known-failing: S13, S17, S18, S20)
+    name: "server smoke (known-failing: S13, S17, S18, S20)"
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:

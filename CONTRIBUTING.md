@@ -6,7 +6,7 @@ codebase come back to that sentence, so reading it once before you start will sa
 
 ## Before you open anything
 
-- Check [open issues](https://github.com/hadihanafpi/pi-web/issues) and the
+- Check the open issues and the
   [capability matrix](docs/CAPABILITY_MATRIX.md), which lists every claim the README makes and whether
   it is actually verified. If your idea touches runtime behaviour, the matrix is the contract.
 - For anything larger than a typo or a small bug fix, open an issue first. A short paragraph is enough.
@@ -132,5 +132,6 @@ becomes the log entry and should read like `fix(server): stop SSE replay after r
 
 ## Getting help
 
-Open a [Q&A discussion](https://github.com/hadihanafpi/pi-web/discussions) for "how do I…" questions
-and use issues for bugs and feature requests. There is no chat channel.
+Use the **Q&A** category in GitHub Discussions for "how do I…" questions and issues for
+bugs and feature requests. There is no chat channel. (Discussions must be enabled once in the
+repository settings; see `docs/GITHUB_REPO_SETTINGS.md`.)
