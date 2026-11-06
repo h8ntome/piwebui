@@ -30,6 +30,21 @@ pure-read stats. See script for exact assertions S1–S20.
 - `tsc` clean on shared, pi-adapter, server, client (strict; exactOptionalPropertyTypes).
 - okhsl conversion vendored from pi's MIT Oklab math; parity-checked against pi theme JSON.
 
+## Automated — browser UI pass (agent-browser, headless Chromium)
+
+Dated 2026-11-06 against the warm server on loopback:
+
+- Login screen renders; bootstrap-code exchange → cookie+CSRF → authenticated shell ✔
+- Code is single-use (second exchange rejected) — enforced server-side, UI reflects it ✔
+- Zero console/page errors on login, reload, theme toggle (`agent-browser errors` empty) ✔
+- Pi-derived dark palette actually applied from `/api/v1/themes/current` (`body background rgb(10,10,10)` = pi `dark.json` pageBg) ✔
+- Honest disabled composer state for uncontrolled sessions ("no controllable runtime (file mirror / history)") ✔
+- Screenshot: `/tmp/piweb-ui-login-shell.png`
+
+This pass caught two real client bugs, since fixed: `refreshSessions` waited on the (slow) session
+list before fetching workspaces (＋new button never appeared), and it mapped `w.key` where the API
+returns `workspaceKey`.
+
 ## NOT RUN — manual, intentionally honest
 
 | Check | How to run | Why not run yet |
@@ -38,7 +53,7 @@ pure-read stats. See script for exact assertions S1–S20.
 | Screen-reader pass (VoiceOver) | Walk the rail/composer/dialog modal with VoiceOver; composer and dialog have roles/labels in code | No automated accessibility harness in this environment |
 | 24-hour soak (leaks, epoch rollover, ring bounds) | `npm run p0:verify && for i in {1..24}; do npx tsx e2e/server-smoke.mts; sleep 3600; done` | Multi-hour wall clock |
 | TLS termination behind proxy on NetBird interface | Configure local Caddy/nginx per README; verify Secure cookie + Host/Origin enforcement | No pi-web-owned certificate/endpoint provisioned in this session; existing Paseo proxy left untouched as instructed |
-| Browser end-to-end UI interaction suite | vite + Playwright against mock provider | Client UI + server integration verified via smoke + manual checks; a scripted browser suite is queued as follow-up |
+| Browser end-to-end UI interaction suite | vite + Playwright against mock provider | Login shell, palette, error-free boot verified manually via agent-browser (above); scripted flow incl. prompt-through-UI screenshot queued as follow-up |
 
 ## Environment observations (dated 2026-11-05)
 

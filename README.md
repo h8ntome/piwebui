@@ -139,9 +139,12 @@ pi-web print-bridge-command       # exact env + pi -e command for terminal pi
 ## Testing
 
 ```bash
+npm run build           # typechecks + builds the web client
+npx tsc -p packages/shared/tsconfig.json   # per-package typechecks (adapter/server/client)
+npm run test:unit     # unit tests (okhsl parity, framing, schemas)
 npm run p0:verify       # capability matrix against real pi (read paths, managed host, live bridge under PTY)
 npx tsx e2e/server-smoke.mts   # full-stack HTTP/SSE smoke incl. four concurrent sessions
-npx tsc -p packages/shared/tsconfig.json  # and per-package typechecks
+PIWEB_SMOKE_PORT=4319 PIWEB_SMOKE_DATA=~/.pi-web npx tsx e2e/server-smoke.mts  # same smoke against an already-running server
 ```
 
 - `e2e/p0-capability-matrix.ts` — the honest capability matrix (also rendered to

@@ -19,6 +19,8 @@ export class ReadClient {
   private seq = 0;
   private pending = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: NodeJS.Timeout }>();
   private ready: Promise<void> | null = null;
+  private realReady: Promise<void> = Promise.resolve();
+  private realReadyResolve: () => void = () => undefined;
   private rootsFingerprint = "";
 
   constructor(private opts: { piPackageEnv?: string }) {}
@@ -50,10 +52,11 @@ export class ReadClient {
       this.pending.clear();
       this.proc = null;
       this.ready = null;
+      this.realReady = new Promise<void>(() => undefined); // never resolves until next ensure()
     });
     this.proc!.on("message", (msg: any) => {
       if (!msg || typeof msg !== "object") return;
-      if (msg.t === "ready") { const r = this.readyResolve; r?.(); return; }
+      if (msg.t === "ready") { this.realReadyResolve(); this.readyResolve?.(); return; }
       const p = this.pending.get(msg.id);
       if (!p) return;
       this.pending.delete(msg.id);
@@ -64,15 +67,20 @@ export class ReadClient {
     let readyResolve!: () => void;
     this.ready = new Promise<void>((r) => { readyResolve = r; });
     this.readyResolve = readyResolve;
-    // wait for ready handshake
-    const timer = setTimeout(() => this.readyResolve?.(), 15_000);
+    this.realReady = new Promise<void>((r) => { this.realReadyResolve = r; });
+    // fail-open handshake wait: server stays responsive (calls time out honestly) even if the
+    // worker takes pathologically long to load (observed >15 min under macOS fileproviderd storms)
+    const timer = setTimeout(() => this.readyResolve?.(), 90_000);
     await this.ready;
     clearTimeout(timer);
   }
   private readyResolve?: () => void;
 
-  async call<T>(op: string, args: Record<string, unknown>, timeoutMs = 30_000): Promise<T> {
+  async call<T>(op: string, args: Record<string, unknown>, timeoutMs = 30_000, readyWaitMs = 300_000): Promise<T> {
     await this.ensure(this.currentRoots);
+    // wait for the worker's real ready handshake before queueing a call, so slow boots
+    // (cold FS) succeed instead of timing out repeatedly
+    await Promise.race([this.realReady, new Promise<void>((r) => setTimeout(r, readyWaitMs))]);
     const id = `r${++this.seq}`;
     return await new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {

@@ -127,9 +127,12 @@ export const useStore = create<Store>((set, get) => {
 
     boot: async () => {
       try {
-        const me = await api.get<{ principal: { id: string; kind: string }; csrf: string }>("/api/v1/auth/me");
-        api.setCsrf(me.csrf);
-        set({ authed: true, principal: me.principal });
+        const me = await api.get<{ id: string; name: string; kind: string }>("/api/v1/auth/me");
+        if (me.kind === "web") {
+          const c = await api.get<{ csrf: string | null }>("/api/v1/auth/csrf");
+          if (c.csrf) api.setCsrf(c.csrf);
+        }
+        set({ authed: true, principal: { id: me.id, kind: me.kind } });
         await get().refreshSessions();
       } catch (e) {
         set({ authed: (e as ApiError).status === 401 ? false : null });
@@ -139,9 +142,10 @@ export const useStore = create<Store>((set, get) => {
 
     login: async (code) => {
       try {
-        const out = await api.post<{ csrf: string; principal: { id: string; kind: string } }>("/api/v1/auth/exchange", { code });
+        const out = await api.post<{ csrf: string }>("/api/v1/auth/exchange", { code });
         api.setCsrf(out.csrf);
-        set({ authed: true, principal: out.principal });
+        const me = await api.get<{ id: string; name: string; kind: string }>("/api/v1/auth/me");
+        set({ authed: true, principal: { id: me.id, kind: me.kind } });
         await get().refreshSessions();
         return null;
       } catch (e) { return (e as ApiError).message ?? "login failed"; }
@@ -154,10 +158,11 @@ export const useStore = create<Store>((set, get) => {
     },
 
     refreshSessions: async () => {
-      const out = await api.get<{ sessions: SessionListItem[] }>("/api/v1/sessions?limit=100");
-      set({ sessions: out.sessions });
-      const ws = await api.get<{ workspaces: { key: string; path: string; label?: string | null }[] }>("/api/v1/workspaces");
-      set({ workspaces: ws.workspaces.map((w) => ({ key: w.key, path: w.path, label: w.label ?? null })) });
+      const [out, ws] = await Promise.all([
+        api.get<{ sessions: SessionListItem[] }>("/api/v1/sessions?limit=100"),
+        api.get<{ workspaces: { workspaceKey: string; path: string; label?: string | null }[] }>("/api/v1/workspaces"),
+      ]);
+      set({ sessions: out.sessions, workspaces: ws.workspaces.map((w) => ({ key: w.workspaceKey, path: w.path, label: w.label ?? null })) });
     },
 
     acquireControl: async (key) => {
