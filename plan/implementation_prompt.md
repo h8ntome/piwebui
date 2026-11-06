@@ -1,7 +1,7 @@
 # Implementation prompt
 
-Implement pi-web in `/Users/hadi/Documents/pi-web` using the reviewed v0.2 plan in
-`/Users/hadi/Documents/pi-web/plan`. Read every current plan document before coding;
+Implement pi-web in `~/Documents/pi-web` using the reviewed v0.2 plan in
+`~/Documents/pi-web/plan`. Read every current plan document before coding;
 start with README.md, review_and_decisions.md and implementation_plan.md. The hidden
 `.plan-review-backup-2026-11-05` contains superseded v0.1 documents, not requirements.
 

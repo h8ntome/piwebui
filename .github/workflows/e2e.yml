@@ -1,0 +1,43 @@
+name: e2e (advisory)
+
+# Full-stack smoke against a real pi install. This runs on every push/PR but is
+# deliberately non-blocking: four checks (S13 persistence, S17/S18 parallel
+# managed sessions, S20 read-worker stats) are known-failing on `main` and are
+# tracked as open work. They must not silently turn green-to-red noise into a
+# merge requirement, and they must not be deleted to make the pipeline quiet.
+# When the last one passes, remove `continue-on-error` and rename the workflow.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: server smoke (known-failing: S13, S17, S18, S20)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24.x"
+          cache: npm
+      - name: Install pi at the pinned, validated version
+        run: npm install -g @earendil-works/pi-coding-agent@1.5.0
+      - name: Install workspace
+        run: npm ci
+      - name: Build client (the smoke test serves it at /)
+        run: npm run build
+      - name: Full-stack smoke
+        env:
+          PIWEB_SMOKE_KEEP: "0"
+        run: npx tsx e2e/server-smoke.mts

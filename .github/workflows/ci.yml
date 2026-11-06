@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: typecheck + unit tests + build (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # engines requires >=22.19.0: test the floor and the current LTS line.
+        node: ["22.19", "24.x"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - name: Install (clean, from lockfile)
+        run: npm ci
+      - name: Typecheck all workspaces
+        run: npm run typecheck
+      - name: Unit tests
+        run: npm run test:unit
+      - name: Build (typecheck + client bundle)
+        run: npm run build
+      - name: Artifact size sanity (bundle must stay single-folder and no source maps)
+        run: |
+          set -e
+          test -f packages/client/dist/index.html
+          if compgen -G "packages/client/dist/**/*.map" > /dev/null; then
+            echo "FAIL: source maps are being emitted into the shipped bundle" >&2; exit 1
+          fi
+          du -sh packages/client/dist
+      - name: Upload client bundle
+        if: matrix.node == '24.x'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: client-dist
+          path: packages/client/dist
+          retention-days: 7

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and how-to
+    url: https://github.com/hadihanafpi/pi-web/discussions/categories/q-a
+    about: "How do I…", setup help, and usage questions live in Discussions, not issues.
+  - name: Security report
+    url: mailto:hadi@hadi.tn?subject=pi-web%20sec
+    about: Please report vulnerabilities privately as described in SECURITY.md. Do not open a public issue.

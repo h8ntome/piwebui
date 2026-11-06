@@ -1,7 +1,7 @@
 # Appendix: inspected Pi facts and verification limits
 
 Inspected on 2026-11-05. Owning package:
-`/Users/hadi/.local/lib/node_modules/@earendil-works/pi-coding-agent`, version 1.5.0.
+`~/.local/lib/node_modules/@earendil-works/pi-coding-agent`, version 1.5.0.
 Its package declares Node >=22.19.0; local runtime is Node v26.12.1/npm 11.20.0.
 These are source/type inspections and the explicitly stated local experiment, **not**
 end-to-end validation of a working pi-web implementation.

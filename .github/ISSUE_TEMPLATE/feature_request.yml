@@ -1,0 +1,50 @@
+name: Feature request
+description: Propose something new, or a change in behaviour
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: The concrete situation you are in, not the solution. "I want an X button" is a solution; describe the need.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like to happen
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
+      description: Including "do nothing", and what makes it worse.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part does this touch?
+      options:
+        - client (browser UI)
+        - server (HTTP, auth, SSE)
+        - pi-adapter (bridge, managed host, read paths)
+        - shared (types, schemas, color math)
+        - docs
+        - tooling (tests, CI, scripts)
+    validations:
+      required: true
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Does this interact with the pi-runtime rule?
+      description: >
+        pi-web never executes tools, never talks to model providers, and never writes session JSONL;
+        pi stays the only runtime and the only session writer. If your idea appears to need one of
+        those, say so explicitly — that discussion is useful, not a rejection.
+  - type: checkboxes
+    id: willing
+    attributes:
+      label: Willingness
+      options:
+        - label: I would like to implement this and open a PR
+        - label: I am looking for someone else to build it

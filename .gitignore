@@ -6,3 +6,12 @@ data/
 .env
 packages/client/dist/
 *.tsbuildinfo
+
+# --- hygiene ---
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.tmp
+coverage/
