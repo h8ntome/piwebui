@@ -120,10 +120,29 @@ function buildRows(v: SessionView): Row[] {
   return rows;
 }
 
+function toolsFromFileEntries(entries: EntryView[] | undefined): Record<string, ToolStateView> {
+  const out: Record<string, ToolStateView> = {};
+  if (!entries) return out;
+  for (const e of entries) {
+    const m = e.raw.message as { role?: string; toolCallId?: string; toolName?: string; content?: unknown; isError?: boolean } | undefined;
+    if (e.type === "message" && m?.role === "toolResult" && m.toolCallId) {
+      out[m.toolCallId] = {
+        toolCallId: m.toolCallId, toolName: String(m.toolName ?? "tool"),
+        state: m.isError ? "error" : "ok", outputMode: "replace",
+        outputContent: Array.isArray(m.content) ? m.content as unknown as Record<string, unknown>[] : undefined,
+        startedAt: e.timestamp, endedAt: e.timestamp,
+      } as ToolStateView;
+    }
+  }
+  return out;
+}
+
 function MessageRow({ entry }: { entry: EntryView }) {
   const m = entry.raw.message as { role?: string; content?: Block[] | string; timestamp?: string };
   const blocks: Block[] = Array.isArray(m.content) ? m.content as Block[] : typeof m.content === "string" ? [{ type: "text", text: m.content }] : [];
-  const tools = useStore((s) => (s.activeKey ? s.views[s.activeKey]?.tools : {})) ?? {};
+  const runtimeTools = useStore((s) => (s.activeKey ? s.views[s.activeKey]?.tools : {})) ?? {};
+  const fileEntries = useStore((s) => (s.activeKey ? s.views[s.activeKey]?.entries : []));
+  const tools = useMemo(() => ({ ...toolsFromFileEntries(fileEntries), ...runtimeTools }), [fileEntries, runtimeTools]);
   const isUser = m.role === "user";
   return (
     <div className={cls("group px-3 py-1.5", isUser ? "bg-[var(--c-bgSelected)]" : "")}>

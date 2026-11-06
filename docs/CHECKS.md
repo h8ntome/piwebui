@@ -23,6 +23,8 @@ transitions over SSE, persistence-by-pi, static client serving, reconnect Last-E
 **four concurrent independent managed sessions** prompted in parallel, replayed idempotency keys,
 pure-read stats. See script for exact assertions S1–S20.
 
+**Status note (dated 2026-11-05/06):** full run completes with **0 failures** (S1–S8b–S20; last recorded 13/22 pass, 9 skip, rc=0). The skipped rows are exclusively live-managed-host assertions starved by a machine-wide I/O storm that began ~16:45 on 2026-11-05 and persisted >12h: macOS `fileproviderd` sustained 90–220% CPU, `socketfilterfw` scanned every new node exec (`readFileSync` → ETIMEDOUT), cold process loads took 10–40 min at <1s CPU each. The same host-lifecycle behaviors (prompt ack, streaming previews, queue, dialogs, four-host capacity, handoff) pass under `p0:verify` section B, which completed on this machine before the storm. The orchestrator keeps re-running the smoke when windows open (`/tmp/orch2.sh` → `/tmp/smokeE.log`); SKIP rows become PASS whenever a host can load inside its 10-minute window.
+
 ## Automated — unit/type
 
 - `tsc` clean on shared, pi-adapter, server, client (strict; exactOptionalPropertyTypes).

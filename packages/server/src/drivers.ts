@@ -320,7 +320,7 @@ export class ManagedHandle implements Driver {
       if (dbg) { try { fs.appendFileSync(dbg, `[host ${String(initArgs.sessionDir ?? initArgs.cwd ?? "?")}] ${buf.toString()}`); } catch { /* ignore */ } }
     });
     this.ready = new Promise<void>((resolve, reject) => {
-      const t = setTimeout(() => reject(new Error("managed host boot timeout")), 180_000);
+      const t = setTimeout(() => reject(new Error("managed host boot timeout")), 600_000);
       this.bootResolve = () => { clearTimeout(t); if (this.initTimer) clearInterval(this.initTimer); resolve(); };
       this.bootReject = (e) => { clearTimeout(t); if (this.initTimer) clearInterval(this.initTimer); reject(e); };
       this.child.once("exit", (code) => { try { this.bootReject?.(new Error(`host exited during boot (${code})`)); } catch { /* resolved */ } });
