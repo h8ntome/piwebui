@@ -13,9 +13,8 @@ export function logError(event: string, fields: Record<string, unknown> = {}) {
 function emit(level: string, event: string, fields: Record<string, unknown>) {
   const clean: Record<string, unknown> = { t: new Date().toISOString(), level, event };
   for (const [k, v] of Object.entries(fields)) {
-    if (REDACT_KEYS.test(k) && typeof v === "string") continue; // fail-safe: never log string values of content-ish keys
-    clean[k] = typeof v === "number" || typeof v === "boolean" || v === null ? v : undefined;
-    if (clean[k] === undefined) continue;
+    if (REDACT_KEYS.test(k)) continue; // fail-safe: content-ish keys never appear in logs at all
+    clean[k] = typeof v === "string" ? v.slice(0, 300) : v;
   }
   process.stderr.write(JSON.stringify(clean) + "\n");
 }

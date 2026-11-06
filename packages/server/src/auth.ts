@@ -40,6 +40,7 @@ export function loadConfig(flags: Partial<Config> = {}): Config {
   if (process.env.PIWEB_ORIGINS_ALLOW) env.originsAllow = process.env.PIWEB_ORIGINS_ALLOW.split(",").map((s) => s.trim());
   if (process.env.PIWEB_AGENT_DIR) env.agentDir = process.env.PIWEB_AGENT_DIR;
   if (process.env.PIWEB_TLS_CERT && process.env.PIWEB_TLS_KEY) env.tls = { certFile: process.env.PIWEB_TLS_CERT, keyFile: process.env.PIWEB_TLS_KEY };
+  if (process.env.PIWEB_MAX_MANAGED) env.maxManaged = Number(process.env.PIWEB_MAX_MANAGED);
   const merged = { ...structured({ ...fileCfg, ...env, ...stripUndefined(flags) }) };
   return merged;
 }

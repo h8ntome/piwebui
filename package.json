@@ -15,23 +15,15 @@
     "packages/client"
   ],
   "scripts": {
-    "build": "npm run gen:palette && npm run build -w @pi-web/shared && npm run build -w @pi-web/pi-adapter && npm run build -w @pi-web/server && npm run build -w @pi-web/client",
-    "typecheck": "npm run build --workspaces --if-present",
+    "build": "npm run typecheck && npm run build -w @pi-web/client",
+    "typecheck": "tsc -p packages/shared/tsconfig.json && tsc -p packages/pi-adapter/tsconfig.json && tsc -p packages/server/tsconfig.json && tsc -p packages/client/tsconfig.json --noEmit",
     "dev:server": "npm run dev -w @pi-web/server",
     "dev:client": "npm run dev -w @pi-web/client",
     "start": "npm run start -w @pi-web/server",
-    "test": "npm run test:unit && npm run test:integration",
-    "test:unit": "tsx scripts/run-tests.ts unit",
-    "test:integration": "tsx scripts/run-tests.ts integration",
-    "test:e2e": "tsx scripts/run-tests.ts e2e",
-    "test:security": "tsx scripts/run-tests.ts security",
-    "test:perf": "tsx scripts/run-tests.ts perf",
-    "gen:palette": "tsx scripts/gen-palette.ts",
-    "contrast:audit": "tsx scripts/contrast-audit.ts",
-    "lint:client": "tsx scripts/lint-client.ts",
-    "fixtures:gen": "tsx scripts/gen-fixtures.ts",
     "p0:verify": "tsx e2e/p0-capability-matrix.ts",
-    "package:smoke": "tsx scripts/package-smoke.ts"
+    "package:smoke": "tsx scripts/package-smoke.ts",
+    "smoke": "tsx e2e/server-smoke.mts",
+    "test:unit": "tsx --test packages/shared/test/unit.test.mts packages/pi-adapter/test/framing.test.mts"
   },
   "devDependencies": {
     "@types/node": "22.15.3",

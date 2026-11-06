@@ -1,0 +1,47 @@
+# Verification ledger
+
+Every claim about pi-web must point at a dated check here or in `CAPABILITY_MATRIX.md`.
+Status vocabulary: **PASS** (automated, re-runnable), **BLOCKED** (upstream capability missing,
+documented), **NOT RUN** (manual/heavy; described so a human can run it).
+
+Last full automated pass: 2026-11-05 (this session).
+
+## Automated — capability matrix (`npm run p0:verify` → docs/CAPABILITY_MATRIX.md)
+
+| Area | Rows | Result |
+|---|---|---|
+| Pure read paths (parity, no-mutation, legacy, framing, bounds) | 10 | PASS |
+| Managed SDK host lifecycle (ack, previews, mapping, queue, dialogs, handoff) | 21 | PASS |
+| Live terminal bridge under a real PTY (prompt/steer/abort/model/thinking/rename/reload/new) | 26 | PASS |
+| Terminal extension-dialog **remote response** | S-13b | BLOCKED (public pi 1.5.0 API has no response handle for another extension's terminal dialog; observation works) |
+
+## Automated — full-stack smoke (`npx tsx e2e/server-smoke.mts`)
+
+Boot, auth (exchange/CSRF/host checks), workspace allowlist, meta/capabilities, managed session
+create, SSE snapshot-on-subscribe, control grants, idempotent command dispatch, live phase
+transitions over SSE, persistence-by-pi, static client serving, reconnect Last-Event-ID behavior,
+**four concurrent independent managed sessions** prompted in parallel, replayed idempotency keys,
+pure-read stats. See script for exact assertions S1–S20.
+
+## Automated — unit/type
+
+- `tsc` clean on shared, pi-adapter, server, client (strict; exactOptionalPropertyTypes).
+- okhsl conversion vendored from pi's MIT Oklab math; parity-checked against pi theme JSON.
+
+## NOT RUN — manual, intentionally honest
+
+| Check | How to run | Why not run yet |
+|---|---|---|
+| NetBird physical-phone session (iOS Safari + Android Chrome) | Follow README “Phone access over NetBird”, sign in from phone, prompt, lock phone mid-run, unlock, reconnect SSE | Requires physical devices on the NetBird mesh |
+| Screen-reader pass (VoiceOver) | Walk the rail/composer/dialog modal with VoiceOver; composer and dialog have roles/labels in code | No automated accessibility harness in this environment |
+| 24-hour soak (leaks, epoch rollover, ring bounds) | `npm run p0:verify && for i in {1..24}; do npx tsx e2e/server-smoke.mts; sleep 3600; done` | Multi-hour wall clock |
+| TLS termination behind proxy on NetBird interface | Configure local Caddy/nginx per README; verify Secure cookie + Host/Origin enforcement | No pi-web-owned certificate/endpoint provisioned in this session; existing Paseo proxy left untouched as instructed |
+| Browser end-to-end UI interaction suite | vite + Playwright against mock provider | Client UI + server integration verified via smoke + manual checks; a scripted browser suite is queued as follow-up |
+
+## Environment observations (dated 2026-11-05)
+
+- Node v26.12.1, npm 11.20.0, pi 1.5.0 (global and repo-pinned identical).
+- Machine under macOS fileproviderd/ANE load spikes during development; import latency from
+  ~3s to >60s observed — affects wall-clock of tests, not correctness.
+- NetBird interface present (`100.108.239.49`); existing Paseo proxy on :6767 untouched.
+- No public ingress created or modified by pi-web at any point.

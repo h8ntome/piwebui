@@ -15,6 +15,13 @@ export function validate<T extends TSchema>(schema: T, data: unknown): { ok: tru
   return { ok: true, value: data as Static<T> };
 }
 
+/** Query params arrive as strings; Convert coerces numeric/boolean-typed fields before validation. */
+export function validateQuery<T extends TSchema>(schema: T, data: unknown): { ok: true; value: Static<T> } | { ok: false; errors: string[] } {
+  let converted: unknown = data;
+  try { converted = Value.Convert(schema, structuredClone(data)); } catch { converted = data; }
+  return validate(schema, converted);
+}
+
 export function exceedsDepth(v: unknown, max: number, seen = new Set<unknown>()): boolean {
   if (max <= 0) return false;
   if (v === null || typeof v !== "object") return false;

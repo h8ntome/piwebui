@@ -5,10 +5,11 @@
  */
 import Fastify, { type FastifyInstance } from "fastify";
 import fs from "node:fs";
+import path from "node:path";
 import { ERROR_HTTP_STATUS, MAX_REQUEST_BYTES, type ErrorCode } from "@pi-web/shared";
 import { AuthService, COOKIE_NAME, parseCookies, type Config, type Principal } from "./auth.ts";
 import { ApiError } from "./commands.ts";
-import { logInfo } from "./log.ts";
+import { logInfo, logWarn } from "./log.ts";
 
 export interface ReqCtx {
   principal: Principal | null;
@@ -110,14 +111,9 @@ export function buildServer(cfg: Config, auth: AuthService): FastifyInstance {
       reply.code(413).send({ error: { code: "payload_too_large", message: "request body too large" } });
       return;
     }
-    logInfo("unhandled_error", { status: e.statusCode ?? 500 });
+    logWarn("unhandled_error", { status: e.statusCode ?? 500, kind: String(e.code ?? ""), err: String(e.message ?? "").slice(0, 160), where: (err as { stack?: string }).stack ?? "".split("\n").slice(0, 2).join(" | ") });
     reply.code(e.statusCode ?? 500).send({ error: { code: (e.code as ErrorCode) ?? "internal", message: String(e.message ?? "internal error").slice(0, 200) } });
   });
 
   return app;
 }
-
-function errorStatus(code: string): number {
-  return (ERROR_HTTP_STATUS as Record<string, number>)[code] ?? 400;
-}
-void errorStatus;

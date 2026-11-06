@@ -14,7 +14,7 @@ import {
   FilesQuerySchema,
   ListSessionsQuerySchema,
   RawQuerySchema,
-  validate,
+  validate, validateQuery,
   newOpaqueId,
   type Capabilities,
   type CommandEnvelope,
@@ -81,7 +81,7 @@ function body<T>(req: FastifyRequest, schema: Parameters<typeof validate>[0]): T
   return r.value as T;
 }
 function query<T>(req: FastifyRequest, schema: Parameters<typeof validate>[0]): T {
-  const r = validate(schema, req.query);
+  const r = validateQuery(schema, req.query);
   if (!r.ok) throw new ApiError("invalid_request", r.errors.join("; "));
   return r.value as T;
 }
@@ -491,6 +491,7 @@ async function createManagedSession(ctx: AppCtx, ws: WorkspaceInfo, input: { mod
   rec.meta.workspaceKey = ws.workspaceKey;
   rec.meta.cwd = ws.path;
   if (input.name) { rec.meta.name = input.name; rec.state.sessionName = input.name; }
+  sessions.attach(rec); // visible immediately; host readiness updates path/runtime afterwards
   const gen = ++managedGen;
   const handle = spawnManagedHost(
     {

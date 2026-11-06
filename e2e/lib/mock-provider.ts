@@ -112,7 +112,7 @@ export async function startMockProvider(): Promise<MockProvider> {
       res.end();
     });
   });
-  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  await new Promise<void>((r) => server.listen(Number(process.env.PIWEB_MOCK_PORT || 0), "127.0.0.1", r));
   const port = (server.address() as { port: number }).port;
   return {
     url: `http://127.0.0.1:${port}/v1`,

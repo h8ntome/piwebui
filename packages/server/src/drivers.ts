@@ -9,7 +9,7 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { fork, type ChildProcess } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { DISPATCH_ACK_TIMEOUT_MS, HEALTH_MAX_MISSES, HEALTH_PING_MS, MAX_RECORD_BYTES, type Capabilities } from "@pi-web/shared";
 import { logInfo, logWarn } from "./log.ts";
 import { LfFramer, decodeRecord } from "@pi-web/pi-adapter/tail";
@@ -299,6 +299,7 @@ export class ManagedHandle implements Driver {
   private eventCbs: ((e: DriverEvent) => void)[] = [];
   private deadCb: ((reason: "exited" | "lost" | "disposed", code: number | null, signal: string | null) => void) | null = null;
   private dead = false;
+  private initArgs: Record<string, unknown>;
   private pingTimer: NodeJS.Timeout | null = null;
   private missedPongs = 0;
   ready: Promise<void>;
@@ -306,6 +307,7 @@ export class ManagedHandle implements Driver {
 
   constructor(private child: ChildProcess, gen: number, initArgs: Record<string, unknown>) {
     this.generation = gen;
+    this.initArgs = initArgs;
     this.cwd = (initArgs.cwd as string) ?? null;
     this.child.on("message", (msg: any) => this.onMessage(msg));
     this.child.on("exit", (code, signal) => {
@@ -318,19 +320,35 @@ export class ManagedHandle implements Driver {
       if (dbg) { try { fs.appendFileSync(dbg, `[host ${String(initArgs.sessionDir ?? initArgs.cwd ?? "?")}] ${buf.toString()}`); } catch { /* ignore */ } }
     });
     this.ready = new Promise<void>((resolve, reject) => {
-      const t = setTimeout(() => reject(new Error("managed host boot timeout")), 60_000);
-      this.bootResolve = () => { clearTimeout(t); resolve(); };
-      this.bootReject = (e) => { clearTimeout(t); reject(e); };
+      const t = setTimeout(() => reject(new Error("managed host boot timeout")), 180_000);
+      this.bootResolve = () => { clearTimeout(t); if (this.initTimer) clearInterval(this.initTimer); resolve(); };
+      this.bootReject = (e) => { clearTimeout(t); if (this.initTimer) clearInterval(this.initTimer); reject(e); };
       this.child.once("exit", (code) => { try { this.bootReject?.(new Error(`host exited during boot (${code})`)); } catch { /* resolved */ } });
     });
-    this.child.send({ t: "init", args: initArgs });
+    // Handshake: sending init once at fork time races the child's listener attach
+    // under startup contention. The child announces host_ready when its listener is
+    // live; we (re)send init then, and also on a small retry timer as belt-and-braces.
+    // The host treats duplicate inits idempotently.
+    this.initTimer = setInterval(() => this.sendInit(), 1500);
+    this.initTimer.unref?.();
+    this.sendInit();
+  }
+  private initSentTo = new Set<string>();
+  private initTimer: NodeJS.Timeout | null = null;
+  private booted = false;
+  private sendInit() {
+    if (this.booted || this.dead) return;
+    try { this.child.send({ t: "init", args: this.initArgs }); } catch { /* channel gone */ }
   }
   private bootResolve?: () => void;
   private bootReject?: (e: Error) => void;
 
   private onMessage(msg: any) {
     if (!msg || typeof msg !== "object") return;
+    if (msg.t === "host_ready") { this.sendInit(); return; }
     if (msg.t === "auth_ok") {
+      this.booted = true;
+      if (this.initTimer) { clearInterval(this.initTimer); this.initTimer = null; }
       const hi = msg.hello ?? {};
       this.runtimeId = String(hi.runtimeId ?? "unknown");
       this.pid = Number(hi.pid ?? this.child.pid ?? -1);
@@ -415,7 +433,15 @@ export class ManagedHandle implements Driver {
 
 export function spawnManagedHost(initArgs: { cwd: string; agentDir?: string; sessionDir?: string; model?: { provider: string; modelId: string }; thinkingLevel?: string; name?: string }, gen: number, env: Record<string, string>): ManagedHandle {
   const script = fs.existsSync(HOST_DIST) ? HOST_DIST : HOST_SRC;
-  const execArgv = script.endsWith(".ts") ? ["--import", "tsx"] : [];
+  // Absolute loader path: resolving the bare "tsx" specifier costs ~30s on cold FS.
+  const TSX_LOADER = (() => {
+    for (const c of [path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "tsx", "dist", "loader.mjs"),
+                     path.join(process.cwd(), "node_modules/tsx/dist/loader.mjs")]) {
+      if (fs.existsSync(c)) return c;
+    }
+    return null;
+  })();
+  const execArgv = script.endsWith(".ts") ? ["--import", TSX_LOADER ? pathToFileURL(TSX_LOADER).href : "tsx"] : [];
   const child = fork(script, [], {
     execArgv,
     env: { ...process.env, ...env, PIWEB_MANAGED_HOST: "1" },

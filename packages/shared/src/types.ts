@@ -121,6 +121,7 @@ export interface SessionStatus {
   state: RunPhase;
   runtime: RuntimeIdentity | null;
   fileGeneration: string;
+  sessionGeneration: number;
   /** Current leaf id + where it came from: owner live leaf or last on-disk entry. */
   leaf: { entryId: string | null; source: "runtime" | "file" | null };
   capabilities: Capabilities;

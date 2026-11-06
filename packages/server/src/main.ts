@@ -9,6 +9,7 @@ import https from "node:https";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import os from "node:os";
+import crypto from "node:crypto";
 import { resolvePiPackage } from "@pi-web/pi-adapter";
 import { loadConfig, AuthService, saveConfigDir, type Config } from "./auth.ts";
 import { Store } from "./store.ts";
@@ -265,6 +266,19 @@ async function cli() {
   } else if (cmd === "logout-all") {
     auth.logoutAllWeb();
     console.log("ok");
+  } else if (cmd === "allow") {
+    const p = argv[1];
+    if (!p) { console.error("usage: pi-web allow <absolute-directory>"); process.exit(2); }
+    const canon = fs.realpathSync(path.resolve(p));
+    if (!fs.statSync(canon).isDirectory()) { console.error("not a directory"); process.exit(2); }
+    const key = "w_" + crypto.randomBytes(6).toString("hex");
+    store.db.prepare("INSERT INTO workspaces(key,path,label,added_at) VALUES(?,?,?,?) ON CONFLICT(path) DO NOTHING").run(key, canon, canon, new Date().toISOString());
+    const row = store.db.prepare("SELECT key FROM workspaces WHERE path=?").get(canon) as { key: string } | undefined;
+    console.log(`workspace allowed: ${canon} (${row?.key ?? key})`);
+  } else if (cmd === "workspaces") {
+    const rows = store.db.prepare("SELECT key,path FROM workspaces ORDER BY added_at").all() as { key: string; path: string }[];
+    for (const r of rows) console.log(`${r.key}\t${r.path}`);
+    if (!rows.length) console.log("(no workspaces: pi-web allow <dir>)");
   } else if (cmd === "install-bridge") {
     const agentDir = String(flags["agent-dir"] ?? process.env.PI_CODING_AGENT_DIR ?? path.join(os.homedir(), ".pi", "agent"));
     const extDir = path.join(agentDir, "extensions");
@@ -278,7 +292,7 @@ async function cli() {
   } else if (cmd === "print-bridge-command") {
     console.log(`PIWEB_BRIDGE_TOKEN=${auth.bridgeToken()} PIWEB_BRIDGE_DIR=${path.join(cfg.dataDir, "bridges")} pi -e ${bridgeExtensionPathFor(null)}`);
   } else {
-    console.error("usage: pi-web [serve|mint-code|mint-token|revoke-token|logout-all|install-bridge|print-bridge-command]");
+    console.error("usage: pi-web [serve|allow <dir>|workspaces|mint-code|mint-token|revoke-token|logout-all|install-bridge|print-bridge-command]");
     process.exit(2);
   }
   store.close();

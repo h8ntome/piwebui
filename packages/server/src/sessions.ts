@@ -709,6 +709,7 @@ export class Sessions {
       state: this.mode(rec) === "mirror" || this.mode(rec) === "history" ? "unavailable" : rec.state.phase,
       runtime: this.identity(rec),
       fileGeneration: rec.file.genId ?? "none",
+      sessionGeneration: rec.sessionGeneration,
       leaf: { entryId: rec.state.leaf ?? (rec.file.recentEntries.length ? rec.file.recentEntries[rec.file.recentEntries.length - 1]!.entryId : null), source: rec.state.leaf ? "runtime" : "file" },
       capabilities: this.capabilities(rec),
       compat: this.compat(rec),

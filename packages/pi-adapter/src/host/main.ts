@@ -37,8 +37,12 @@ interface PendingDialog {
 }
 
 async function main() {
+  const trace = (stage: string) => { if (process.env.PIWEB_HOST_TRACE) process.send?.({ t: "trace", stage }); };
+  trace("init_waited");
   const init = await waitForInit();
+  trace("pi_importing");
   const pi = await importPi();
+  trace("pi_imported");
   const piVersion: string = pi.VERSION ?? "unknown";
   const runtimeId = crypto.randomBytes(8).toString("hex");
   const startedAt = new Date().toISOString();
@@ -65,7 +69,9 @@ async function main() {
   if (pi.DefaultResourceLoader && pi.SettingsManager && init.agentDir) {
     const sm = pi.SettingsManager.create(init.cwd, init.agentDir);
     const loader = new pi.DefaultResourceLoader({ cwd: init.cwd, agentDir: init.agentDir, settingsManager: sm, additionalExtensionPaths: extensionPaths });
+    trace("loader_reload");
     await loader.reload();
+    trace("loader_reloaded");
     resourceLoader = loader;
     try {
       const extRes: any = (loader as any).getExtensions?.();
@@ -76,7 +82,9 @@ async function main() {
   if (init.agentDir) createOpts.agentDir = init.agentDir;
   if (init.thinkingLevel) createOpts.thinkingLevel = init.thinkingLevel;
   if (resourceLoader) createOpts.resourceLoader = resourceLoader;
+  trace("session_creating");
   const { session } = await pi.createAgentSession(createOpts);
+  trace("session_created");
 
   /* ---------- dialogs ---------- */
   const dialogs = new Map<string, PendingDialog>();

@@ -6,7 +6,7 @@
 import { fork, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { logWarn, logError } from "./log.ts";
 
 export interface ReadWorkerError extends Error { code: string }
@@ -27,10 +27,12 @@ export class ReadClient {
     const candidateTs = path.join(ADAPTER_SRC, "read", "worker.ts");
     const candidateJs = path.join(ADAPTER_DIST, "read", "worker.js");
     if (existsSync(candidateJs)) return { script: candidateJs, execArgv: [] };
-    return { script: candidateTs, execArgv: ["--import", "tsx"] };
+    const loader = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "tsx", "dist", "loader.mjs");
+    return { script: candidateTs, execArgv: existsSync(loader) ? ["--import", pathToFileURL(loader).href] : ["--import", "tsx"] };
   }
 
   async ensure(roots: string[]): Promise<void> {
+    this.currentRoots = [...roots];
     const fp = JSON.stringify([...roots].sort());
     if (this.proc && this.rootsFingerprint === fp) { await this.ready; return; }
     await this.stop();

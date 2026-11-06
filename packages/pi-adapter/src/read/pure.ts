@@ -106,7 +106,7 @@ export interface FullParse {
 
 export async function parseFull(file: string, maxBytes = 256 * 1024 * 1024): Promise<FullParse> {
   const st = await stat(file).catch(() => null);
-  if (!st) throw new Error("file not found");
+  if (!st) throw Object.assign(new Error("file not found"), { code: "not_found" });
   if (st.size > maxBytes) throw new Error(`session file exceeds bounded read budget (${st.size} > ${maxBytes})`);
   const header: Record<string, unknown> | null = null;
   const out: FullParse = { header, entries: [], diagnostics: [], gaps: 0 };
@@ -131,7 +131,7 @@ export interface EntryPageResult extends EntryPage {
 /** Page entries from a byte offset (cursor). Returns the page + next cursor. */
 export async function readEntryPage(file: string, cursor: string | null | undefined, limit: number): Promise<EntryPageResult> {
   const ident = await fileIdentity(file);
-  if (!ident) throw new Error("file not found");
+  if (!ident) throw Object.assign(new Error("file not found"), { code: "not_found" });
   const cur = decodeCursor(cursor);
   let startOffset = 0;
   if (cursor) {
@@ -184,7 +184,7 @@ export async function readEntryPage(file: string, cursor: string | null | undefi
 /** Read the LAST n entries (full pass; used for bounded snapshots of cold files). */
 export async function readEntryTail(file: string, limit: number): Promise<EntryPage> {
   const ident = await fileIdentity(file);
-  if (!ident) throw new Error("file not found");
+  if (!ident) throw Object.assign(new Error("file not found"), { code: "not_found" });
   const window: EntryView[] = [];
   const limitN = Math.max(1, Math.min(1000, limit));
   let count = 0;
