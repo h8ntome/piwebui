@@ -20,7 +20,7 @@ the resolved pi version is not the validated one, runtime-facing endpoints are d
 guessed at, and some checks will report themselves as skipped rather than failed.
 
 ```bash
-git clone https://github.com/hadihanafpi/pi-web
+git clone git@github.com:h8ntome/piweb.git
 cd pi-web
 npm ci                 # reproducible install from package-lock.json
 npm run build          # typecheck all four packages + build the client

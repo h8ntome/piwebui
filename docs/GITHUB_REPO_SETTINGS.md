@@ -1,17 +1,16 @@
 # Repository settings — apply once, in the GitHub UI or with `gh`
 
 Nothing in this file could be applied automatically: at review time the repository had **no git remote**
-and `github.com/hadihanafpi/pi-web` returned 404, so the GitHub repository does not exist yet and there
+and `github.com/h8ntome/piweb` returned 404, so the GitHub repository does not exist yet and there
 was no authenticated `gh` session. Everything below is therefore prepared, not applied.
 
-The docs assume the repository will be published as `github.com/<owner>/pi-web`. `CONTRIBUTING.md`
-contains one `git clone` URL to adjust if the owner differs.
+The docs assume the repository will be published as `github.com/h8ntome/piweb`. `CONTRIBUTING.md` carries the matching clone URL.
 
 ## 1. Create the repository
 
 ```bash
 # from the working checkout
-git remote add origin git@github.com:<owner>/pi-web.git
+git remote add origin git@github.com:h8ntome/piweb.git
 git push -u origin main
 ```
 
@@ -26,7 +25,7 @@ merging* only, to match CONTRIBUTING.
 
 ## 2. Topics (checklist item 6)
 
-Settings → General → About → ⚙ (or `gh repo edit <owner>/pi-web --add-topic ...`):
+Settings → General → About → ⚙ (or `gh repo edit h8ntome/piweb --add-topic ...`):
 
 ```
 pi, pi-coding-agent, coding-agent, ai-agent, agent-ui, web-ui, self-hosted, local-first,
@@ -41,7 +40,7 @@ project does not deliver (deliberately absent: `mcp`, `rag`, `gpt`, `automation`
 
 Settings → General → Social preview → Image → upload `docs/assets/social-preview.png` (1280×640).
 Then hard-refresh the card with `?v=2` in a picker preview. Do not claim the card works until
-`https://github.com/<owner>/pi-web` renders the image in a Slack/Discord/Twitter preview.
+`https://github.com/h8ntome/piweb` renders the image in a Slack/Discord/Twitter preview.
 
 ## 4. GitHub Discussions (checklist item 13)
 
@@ -76,7 +75,7 @@ Create the labels that the templates and `MAINTAINERS.md` reference (GitHub ship
 | `perf` | `#fbca04` | Latency, memory, large-session handling. |
 | `help wanted` | `#008672` | Unblocked, no maintainer time; contributors welcome. |
 
-`gh label create "<name>" --color <code> --repo <owner>/pi-web --description "<meaning>"` for each.
+`gh label create "<name>" --color <code> --repo h8ntome/piweb --description "<meaning>"` for each.
 
 ## 6. Branch protection and secrets scanning
 

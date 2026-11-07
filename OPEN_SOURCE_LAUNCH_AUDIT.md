@@ -7,7 +7,7 @@ against the checklist at <https://settl.fyi/social/open-source-repo-checklist>.
 **Work branch:** `oss-readiness` in `/Users/hadi/work/pi-web-oss`, commits `933c7b5` (code fix) and the
 follow-up documentation/hygiene commit.
 **Nothing was pushed, published, tagged, or submitted anywhere.** The repository has **no git remote**
-and `github.com/hadihanafpi/pi-web` returns 404, so every GitHub-side item below is prepared, not applied.
+and `github.com/h8ntome/piweb` returns 404, so every GitHub-side item below is prepared, not applied.
 
 Two structural notes first, because they shape everything else:
 

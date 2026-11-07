@@ -1,7 +1,7 @@
 blank_issues_enabled: false
 contact_links:
   - name: Questions and how-to
-    url: https://github.com/hadihanafpi/pi-web/discussions/categories/q-a
+    url: https://github.com/h8ntome/piweb/discussions/categories/q-a
     about: How-to and setup questions belong in Discussions rather than issues.
   - name: Security report
     url: "mailto:hadi@hadi.tn?subject=pi-web%20sec"
