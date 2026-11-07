@@ -33,9 +33,13 @@ answered produces a worse repository than leaving them open.
 ## Release process (automated)
 
 npm packages live under the `piwebui` org: `@piwebui/shared`, `@piwebui/pi-adapter` and
-`@piwebui/pi-web` (the server + CLI; `bin` is `piweb`, deliberately not `pi-web`, which is
-already used by an unrelated package on npm). The web client is `private: true` and is not
-published — it is built into `@piwebui/pi-web` as `client-dist`.
+`@piwebui/pi-web` (the server + CLI). The command is **`pi-web`** — bare `pi-web` starts the server
+and opens the browser, mirroring `dsh web` — with **`piweb`** kept as a compatibility alias. Heads-up
+when installing globally: an unrelated package also named `pi-web` (unscoped, by another author)
+publishes a `pi-web` bin, so installing both competes for the same command name and npm will silently
+keep whichever link was written last. That collision is the original reason the bin was `piweb`; if it
+bites a user, the fix is to uninstall one of the two packages, not to rename ours again. The web client
+is `private: true` and is not published — it is built into `@piwebui/pi-web` as `client-dist`.
 
 Releasing is one command:
 
@@ -52,18 +56,33 @@ registry reports back. Nothing else publishes; pushing commits does not touch np
 npm versions are immutable and a commit-triggered publish would fail on the next push.
 
 One-time bootstrap, per package, because npm cannot configure a trusted publisher for a
-package that does not exist yet: the first `npm publish` of each must be done locally with a
-granular token (`npm publish -w ./packages/shared --provenance` etc.), then on each package's
-npm page enable **Trusted Publishing → GitHub Actions** for repo `h8ntome/piwebui`, workflow
-file `release.yml`. After that the tag flow needs no token at all. If you would rather skip
-trusted publishing, store a granular publish token as the repo secret `NPM_TOKEN`; the
-workflow already passes it through, and it is ignored when empty.
+package that does not exist yet (npm/cli#8544) — a CI publish of a brand-new package fails
+with a misleading `EOTP`. Do it once from a logged-in terminal, **without** `--provenance`
+(there is no OIDC context locally, so provenance cannot be signed):
+
+```bash
+npm login --auth-type=web        # interactive 2FA; a token cannot satisfy this for new packages
+npm run build
+npm publish -w ./packages/shared     --access public
+npm publish -w ./packages/pi-adapter --access public
+npm publish -w ./packages/server     --access public
+```
+
+Then, on each package's npm page: **Settings → Trusted Publishing → Add trusted publisher**,
+provider GitHub Actions, repo `h8ntome/piwebui`, workflow file `release.yml` (the filename must
+match exactly). Every later tag then publishes itself with no stored secret. Skipping trusted
+publishing instead: store a granular publish token as the repo secret `NPM_TOKEN` — the workflow
+picks it up automatically and drops `--provenance` in that mode, and it can also do the bootstrap
+above from CI. Note npm is removing direct publish from 2FA-bypass tokens in January 2027, so
+this is a bridge, not a destination.
 
 Internal dependency ranges are caret versions (`^0.1.0`), not the `workspace:*` protocol:
 `npm pack` does not rewrite `workspace:*` in this layout, so a published tarball carrying it
 is uninstallable (`EUNSUPPORTEDPROTOCOL`). Bump all three manifests together.
 
-There is no published release yet and no tag; the version in every manifest is `0.1.0`.
+Nothing is on the registry yet. The tag `v0.1.0` is pushed (at `3265ba7`); its release run built
+and passed the packaging gate, then died at `npm publish` with `EOTP` for exactly the reason
+above. The version in every manifest is still `0.1.0`, so the bootstrap can publish it as-is.
 
 ## Verifying a claim before it reaches the README
 

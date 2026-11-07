@@ -9,10 +9,19 @@ name: release
 # (`npm run package:smoke`: pack -> clean install -> boot -> authed probe).
 #
 # Auth: npm Trusted Publishing (OIDC) via `--provenance`, so no npm token is stored
-# in repository secrets. The first publish of each package still has to be done by a
-# human with a token (npm cannot create a trusted-publisher config for a package that
-# does not exist yet); after that, add the publisher on each package's npm Settings
-# page pointing at this repo and workflow file and every later tag publishes itself.
+# in repository secrets. npm cannot create a trusted-publisher config for a package
+# that does not exist yet (npm/cli#8544), so the *first* publish of each package is a
+# one-time manual step — see MAINTAINERS.md. Once a package exists and the publisher is
+# registered, every later tag publishes itself with no secret at all.
+#
+# A brand-new package under OIDC-only auth fails with a misleading `EOTP` (provenance is
+# signed to the transparency log first, then the publish is refused). The Preflight step
+# below detects that state up front and says so instead.
+#
+# Escape hatch: a repo secret `NPM_TOKEN` (granular token) switches this workflow to
+# token publishing — no provenance, and it can create new packages, which makes it the
+# zero-touch bootstrap if you accept a stored credential. npm removes direct publish
+# from 2FA-bypass tokens in January 2027.
 
 on:
   push:
@@ -34,7 +43,6 @@ jobs:
           node-version: "24.x"
           registry-url: https://registry.npmjs.org
           cache: npm
-          # scope: @piwebui   # uncomment only if you switch back to a stored NPM_TOKEN
 
       - name: Install
         run: npm ci
@@ -55,26 +63,62 @@ jobs:
           done
           echo "tag v$tag matches every manifest"
 
+      - name: Resolve publish auth
+        id: auth
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -n "${NPM_TOKEN:-}" ]; then
+            echo "mode=token" >> "$GITHUB_OUTPUT"
+            echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" >> ~/.npmrc
+            echo "::notice::Publishing with the NPM_TOKEN secret; provenance is skipped."
+          else
+            echo "mode=oidc" >> "$GITHUB_OUTPUT"
+            v=$(npm -v)
+            if [ "${v%%.*}" -lt 11 ] || { [ "${v%%.*}" -eq 11 ] && [ "$(echo "$v" | cut -d. -f2)" -lt 5 ]; }; then
+              echo "::error::npm $v is too old for trusted publishing (needs >= 11.5.1); add 'npm install -g npm@latest'."
+              exit 1
+            fi
+            echo "Publishing via OIDC trusted publishing with npm $v."
+          fi
+
+      - name: Preflight the registry state
+        run: |
+          set -euo pipefail
+          missing=0
+          for p in shared pi-adapter server; do
+            name=$(node -p "require('./packages/$p/package.json').name")
+            if v=$(npm view "$name" version 2>/dev/null) && [ -n "$v" ]; then
+              echo "$name exists on npm at $v"
+            else
+              echo "$name is not on npm yet"
+              missing=1
+            fi
+          done
+          if [ "$missing" = 1 ] && [ "${{ steps.auth.outputs.mode }}" = oidc ]; then
+            echo "::error::A package here has never been published and npm cannot create one via trusted publishing (the trusted-publisher setting only exists on a package that already exists). One-time bootstrap: npm run build, then npm publish -w ./packages/<p> --access public from a logged-in CLI (no --provenance locally); then register the trusted publisher (repo h8ntome/piwebui, workflow release.yml) on each package's npm Settings page, or set the NPM_TOKEN secret and re-run. See MAINTAINERS.md."
+            exit 1
+          fi
+
       - name: Build and package gate
         timeout-minutes: 8
         run: |
           npm run build
           npm run package:smoke
 
-      - name: Publish (provenance, in dependency order)
+      - name: Publish (in dependency order)
+        # OIDC path uses --provenance and the id-token permission; the token path was
+        # already written into ~/.npmrc and must not ask for provenance it cannot sign.
         run: |
           set -euo pipefail
+          provenance=(--provenance)
+          [ "${{ steps.auth.outputs.mode }}" = token ] && provenance=()
           for p in shared pi-adapter server; do
             echo "::group::publish packages/$p"
-            npm publish -w "./packages/$p" --provenance --access public
+            npm publish -w "./packages/$p" "${provenance[@]}" --access public
             echo "::endgroup::"
           done
-        # No token here on purpose: npm publishes from CI via the OIDC id-token above
-        # (Trusted Publishing). If you prefer a token instead, generate an **Automation**
-        # access token (a login token is refused with EOTP when 2FA is on), store it as the
-        # repo secret NPM_TOKEN, and uncomment:
-        #   env:
-        #     NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Show what landed
         run: |
