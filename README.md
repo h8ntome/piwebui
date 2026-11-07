@@ -192,3 +192,12 @@ PIWEB_SMOKE_PORT=4319 PIWEB_SMOKE_DATA=~/.pi-web npx tsx e2e/server-smoke.mts  #
 - No embedded terminal, editor, settings UI, or credential management — those stay in `pi`.
 - 24-hour soak, real-device phone sessions, and screen-reader passes have not been run yet; see
   `docs/CHECKS.md` for the honest, dated checklist of what is and is not verified.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
+
+pi-web is an independent project: it drives [pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent)
+and vendors a small amount of MIT-licensed math from `pi-tui` (attribution preserved in
+`packages/shared/src/okhsl.ts`), but it is not part of pi. It is also unrelated to the other
+`pi-web`-named packages on npm that appeared independently.
