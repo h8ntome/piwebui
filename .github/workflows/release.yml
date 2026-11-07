@@ -159,13 +159,27 @@ jobs:
       - name: Publish (in dependency order)
         # OIDC path uses --provenance and the id-token permission; the token path was
         # already written into ~/.npmrc and must not ask for provenance it cannot sign.
+        # A rejected publish shows up as 404-on-PUT, never 403, so translate it here.
         run: |
           set -euo pipefail
           provenance=(--provenance)
           [ "${{ steps.auth.outputs.mode }}" = token ] && provenance=()
           for p in shared pi-adapter server; do
             echo "::group::publish packages/$p"
-            npm publish -w "./packages/$p" "${provenance[@]}" --access public --tag "${{ steps.kind.outputs.tag }}"
+            if ! npm publish -w "./packages/$p" "${provenance[@]}" --access public --tag "${{ steps.kind.outputs.tag }}" > /tmp/pub.log 2>&1; then
+              cat /tmp/pub.log
+              if grep -q "404 Not Found - PUT" /tmp/pub.log; then
+                if [ "${{ steps.auth.outputs.mode }}" = oidc ]; then
+                  echo "::error::npm refused this publisher (it answers 404, not 403, to hide existence). Under OIDC that means no trusted publisher is registered for this package yet: on its npm Settings page add Trusted Publishing -> GitHub Actions, owner h8ntome, repo piwebui, workflow name release.yml. Alternatively set the NPM_TOKEN repo secret."
+                else
+                  echo "::error::npm refused this publisher (404, not 403, by design). The NPM_TOKEN secret cannot write to this package: it must cover 'All packages' with read-and-manage rights, and cannot be limited to a per-package allowlist."
+                fi
+              elif grep -q "cannot publish over the previously published versions" /tmp/pub.log; then
+                echo "::error::this version already exists on npm and versions are immutable; bump the manifests (or let the canary stamp pick a fresh run number)."
+              fi
+              exit 1
+            fi
+            cat /tmp/pub.log
             echo "::endgroup::"
           done
 
