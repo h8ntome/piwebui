@@ -151,11 +151,14 @@ explicitly and add the Host/Origin entries.
 
 ## CLI
 
+From a checkout the entry point is `./packages/server/bin/pi-web.mjs`;
+once published, `npm i -g @piwebui/pi-web` installs it as **`piweb`**.
+
 ```
-pi-web serve [--port 4319] [--bind 127.0.0.1] [--data-dir DIR] [--host-allow h1,h2]
+piweb serve [--port 4319] [--bind 127.0.0.1] [--data-dir DIR] [--host-allow h1,h2]
              [--agent-dir DIR] [--tls-cert F --tls-key F]
-pi-web allow <absolute-dir>       # workspace allowlist entry
-pi-web workspaces                 # list allowlisted workspaces
+piweb allow <absolute-dir>       # workspace allowlist entry
+piweb workspaces                 # list allowlisted workspaces
 pi-web mint-code                  # one-use browser login code
 pi-web mint-token [--name n]      # long-lived API bearer token
 pi-web revoke-token --id ID

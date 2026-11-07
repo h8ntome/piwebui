@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { BOOTSTRAP_CODE_TTL_MS, CSRF_HEADER_NAME, DEFAULT_BIND, DEFAULT_PORT, SESSION_COOKIE_NAME } from "@pi-web/shared";
+import { BOOTSTRAP_CODE_TTL_MS, CSRF_HEADER_NAME, DEFAULT_BIND, DEFAULT_PORT, SESSION_COOKIE_NAME } from "@piwebui/shared";
 import { Store } from "./store.ts";
 
 export interface TlsConfig { certFile: string; keyFile: string; }

@@ -3,7 +3,7 @@
  * U+2028/U+2029 which are valid characters inside JSON strings — see plan appendix).
  * Offsets are absolute byte offsets in the file.
  */
-import type { EntryView } from "@pi-web/shared";
+import type { EntryView } from "@piwebui/shared";
 
 export interface FramedRecord {
   bytes: Buffer;

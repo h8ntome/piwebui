@@ -8,7 +8,7 @@ import { open, stat, realpath, lstat } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { decodeRecord, generationId, identityFromStats, LfFramer, type FramedRecord } from "../tail.ts";
-import { MAX_RECORD_BYTES, type ContextView, type EntryPage, type EntryView, type StatsView, type TreeView, type TreeNodeView, type SessionMeta } from "@pi-web/shared";
+import { MAX_RECORD_BYTES, type ContextView, type EntryPage, type EntryView, type StatsView, type TreeView, type TreeNodeView, type SessionMeta } from "@piwebui/shared";
 
 export interface ReadableFileIdentity {
   genId: string;

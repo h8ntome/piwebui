@@ -10,9 +10,9 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { fork, type ChildProcess } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { DISPATCH_ACK_TIMEOUT_MS, HEALTH_MAX_MISSES, HEALTH_PING_MS, MAX_RECORD_BYTES, type Capabilities } from "@pi-web/shared";
+import { DISPATCH_ACK_TIMEOUT_MS, HEALTH_MAX_MISSES, HEALTH_PING_MS, MAX_RECORD_BYTES, type Capabilities } from "@piwebui/shared";
 import { logInfo, logWarn } from "./log.ts";
-import { LfFramer, decodeRecord } from "@pi-web/pi-adapter/tail";
+import { LfFramer, decodeRecord } from "@piwebui/pi-adapter/tail";
 
 export type DriverEvent = { name: string; payload: Record<string, unknown> };
 

@@ -1,21 +1,21 @@
 {
-  "name": "@pi-web/server",
+  "name": "@piwebui/pi-web",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
   "scripts": {
     "start": "tsx src/main.ts",
     "dev": "tsx src/main.ts",
-    "build": "tsc -p tsconfig.json"
+    "build": "tsc -p tsconfig.json",
+    "prepublishOnly": "cd ../.. && npm run build"
   },
   "dependencies": {
-    "@pi-web/pi-adapter": "*",
-    "@pi-web/shared": "*",
+    "@piwebui/pi-adapter": "^0.1.0",
+    "@piwebui/shared": "^0.1.0",
     "fastify": "5.12.8",
     "tsx": "4.23.15"
   },
   "bin": {
-    "pi-web": "./bin/pi-web.mjs"
+    "piweb": "./bin/pi-web.mjs"
   },
   "files": [
     "src",
@@ -30,6 +30,21 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/OWNER/pi-web.git"
-  }
+    "url": "git+https://github.com/h8ntome/piweb.git"
+  },
+  "description": "pi-web server and CLI: local-first browser view and control surface for pi coding-agent sessions.",
+  "publishConfig": {
+    "access": "public"
+  },
+  "homepage": "https://github.com/h8ntome/piweb#readme",
+  "author": "h8ntome",
+  "keywords": [
+    "pi",
+    "coding-agent",
+    "local-first",
+    "self-hosted",
+    "web-ui",
+    "sse",
+    "cli"
+  ]
 }

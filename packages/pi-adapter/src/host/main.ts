@@ -13,8 +13,8 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import { importPi } from "../pi-resolve.ts";
-import type { Capabilities, DialogRequest, PreviewState, QueueState, ToolStateView } from "@pi-web/shared";
-import { MAX_PREVIEW_MESSAGE_BYTES, MAX_TOOL_STATE_BYTES } from "@pi-web/shared";
+import type { Capabilities, DialogRequest, PreviewState, QueueState, ToolStateView } from "@piwebui/shared";
+import { MAX_PREVIEW_MESSAGE_BYTES, MAX_TOOL_STATE_BYTES } from "@piwebui/shared";
 
 export interface HostInitArgs {
   cwd: string;

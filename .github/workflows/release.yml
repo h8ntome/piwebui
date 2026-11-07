@@ -1,0 +1,75 @@
+name: release
+
+# Pushing a tag publishes to npm automatically — no separate release step.
+#
+#   git tag v0.1.0 && git push origin v0.1.0
+#
+# The tag must match the version in the package manifests (checked below), and the
+# packaging gate that runs first is the same one that passes locally
+# (`npm run package:smoke`: pack -> clean install -> boot -> authed probe).
+#
+# Auth: npm Trusted Publishing (OIDC) via `--provenance`, so no npm token is stored
+# in repository secrets. The first publish of each package still has to be done by a
+# human with a token (npm cannot create a trusted-publisher config for a package that
+# does not exist yet); after that, add the publisher on each package's npm Settings
+# page pointing at this repo and workflow file and every later tag publishes itself.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    name: publish ${{ github.ref_name }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24.x"
+          registry-url: https://registry.npmjs.org
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Refuse a tag that does not match the manifests
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#v}"
+          for p in shared pi-adapter server; do
+            v=$(node -p "require('./packages/$p/package.json').version")
+            if [ "$v" != "$tag" ]; then
+              echo "::error::tag v$tag does not match packages/$p/package.json version $v" >&2
+              exit 1
+            fi
+          done
+          echo "tag v$tag matches every manifest"
+
+      - name: Build and package gate
+        run: |
+          npm run build
+          npm run package:smoke
+
+      - name: Publish (provenance, in dependency order)
+        run: |
+          set -euo pipefail
+          for p in shared pi-adapter server; do
+            echo "::group::publish packages/$p"
+            npm publish -w "./packages/$p" --provenance --access public
+            echo "::endgroup::"
+          done
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Show what landed
+        run: |
+          sleep 20
+          for n in @piwebui/shared @piwebui/pi-adapter @piwebui/pi-web; do
+            printf "%-22s %s\n" "$n" "$(npm view "$n" version 2>/dev/null || echo 'not visible yet')"
+          done

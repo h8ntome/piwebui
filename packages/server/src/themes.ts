@@ -7,8 +7,8 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { contrastRatio, hexToRgb, parseOkhsl, rgbToHex, okhslToRgb, relLuminance } from "@pi-web/shared";
-import { resolvePiPackage } from "@pi-web/pi-adapter";
+import { contrastRatio, hexToRgb, parseOkhsl, rgbToHex, okhslToRgb, relLuminance } from "@piwebui/shared";
+import { resolvePiPackage } from "@piwebui/pi-adapter";
 
 const relLum = relLuminance;
 

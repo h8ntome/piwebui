@@ -24,7 +24,7 @@ import {
   type SessionMeta,
   type SnapshotPayload,
   type WorkspaceInfo,
-} from "@pi-web/shared";
+} from "@piwebui/shared";
 import type { AuthService } from "./auth.ts";
 import type { Config } from "./auth.ts";
 import type { Store } from "./store.ts";

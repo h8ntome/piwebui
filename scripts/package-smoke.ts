@@ -26,9 +26,10 @@ const tgzDir = path.join(tmp, "tgz");
 fs.mkdirSync(tgzDir);
 const packs: string[] = [];
 for (const w of ["shared", "pi-adapter", "server"]) {
-  const r = spawnSync("npm", ["pack", "--pack-destination", tgzDir, "-w", `@pi-web/${w}`], { cwd: ROOT, encoding: "utf8" });
+  const spec = { shared: "@piwebui/shared", "pi-adapter": "@piwebui/pi-adapter", server: "@piwebui/pi-web" }[w]!;
+  const r = spawnSync("npm", ["pack", "--pack-destination", tgzDir, "-w", spec], { cwd: ROOT, encoding: "utf8" });
   const file = r.stdout.trim().split("\n").pop() ?? "";
-  if (r.status !== 0 || !file) { fail(`npm pack @pi-web/${w}`); } else packs.push(path.join(tgzDir, file));
+  if (r.status !== 0 || !file) { fail(`npm pack ${spec}`); } else packs.push(path.join(tgzDir, file));
 }
 ok(`packed: ${packs.map((p) => path.basename(p)).join(", ")}`);
 
@@ -43,8 +44,8 @@ ok("clean install of packed artifacts");
 // 4. boot the packed server and query health
 const dataDir = path.join(tmp, "data");
 const PORT = 4096 + Math.floor(Math.random() * 4096);
-const bin = path.join(install, "node_modules/.bin/pi-web");
-if (!fs.existsSync(bin)) { fail("packed bin pi-web missing"); process.exit(1); }
+const bin = path.join(install, "node_modules/.bin/piweb");
+if (!fs.existsSync(bin)) { fail("packed bin piweb missing"); process.exit(1); }
 const srv = spawn(bin, ["serve", "--port", String(PORT), "--data-dir", dataDir], { cwd: install, stdio: ["ignore", "pipe", "pipe"] });
 let out = "";
 srv.stdout.on("data", (d) => { out += d; });

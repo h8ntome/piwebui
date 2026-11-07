@@ -8,7 +8,7 @@ import {
   type Command,
   type CommandEnvelope,
   type OperationState,
-} from "@pi-web/shared";
+} from "@piwebui/shared";
 import { Sessions, type SessionRec } from "./sessions.ts";
 import { Operations, sanitizeReceipt } from "./operations.ts";
 import { ControlGrants } from "./control.ts";

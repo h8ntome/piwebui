@@ -1,6 +1,6 @@
 /**
  * Copies the built client into the server package so a packed/installed
- * `@pi-web/server` can serve the UI without the monorepo layout.
+ * `@piwebui/pi-web` can serve the UI without the monorepo layout.
  * Runs as the last step of `npm run build`.
  */
 import fs from "node:fs";
@@ -12,7 +12,7 @@ const from = path.join(ROOT, "packages", "client", "dist");
 const to = path.join(ROOT, "packages", "server", "client-dist");
 
 if (!fs.existsSync(path.join(from, "index.html"))) {
-  console.error(`stage-client-dist: no built client at ${from}; run npm run build -w @pi-web/client first`);
+  console.error(`stage-client-dist: no built client at ${from}; run npm run build -w @piwebui/client first`);
   process.exit(1);
 }
 fs.rmSync(to, { recursive: true, force: true });

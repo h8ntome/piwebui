@@ -11,7 +11,7 @@ import { open, stat } from "node:fs/promises";
 import { buildTree, computeStats, encodeCursor, fileIdentity, listSessionFiles, projectContext, readEntryById, readEntryPage, readEntryTail, safeRealpath, summarizeSessionFile } from "./pure.ts";
 import { importPi, resolvePiPackage } from "../pi-resolve.ts";
 import { FINGERPRINT_BYTES } from "../tail.ts";
-import { MAX_FILE_VIEW_BYTES, RAW_RANGE_MAX_BYTES } from "@pi-web/shared";
+import { MAX_FILE_VIEW_BYTES, RAW_RANGE_MAX_BYTES } from "@piwebui/shared";
 
 const rootsRaw = process.env.PIWEB_READ_ROOTS ?? "[]";
 let roots: string[] = JSON.parse(rootsRaw);

@@ -1,5 +1,5 @@
 {
-  "name": "@pi-web/client",
+  "name": "@piwebui/client",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -9,7 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@pi-web/shared": "*",
+    "@piwebui/shared": "^0.1.0",
     "dompurify": "3.2.4",
     "highlight.js": "11.11.1",
     "lucide-react": "0.545.0",
@@ -25,5 +25,6 @@
     "@vitejs/plugin-react": "4.5.2",
     "tailwindcss": "4.3.4",
     "vite": "7.1.11"
-  }
+  },
+  "description": "pi-web web client (built into @piwebui/pi-web; not published on its own)."
 }

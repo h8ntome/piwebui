@@ -30,23 +30,40 @@ answered produces a worse repository than leaving them open.
 - Add a `good first issue` only when you would genuinely accept a stranger's patch for it, and include
   the file paths that need to change — `docs/GOOD_FIRST_ISSUES.md` has the current set.
 
-## Release process
+## Release process (automated)
 
-There is no published release yet and no tag; `0.1.0` is the version in every workspace manifest and
-every manifest is still `"private": true`.
+npm packages live under the `piwebui` org: `@piwebui/shared`, `@piwebui/pi-adapter` and
+`@piwebui/pi-web` (the server + CLI; `bin` is `piweb`, deliberately not `pi-web`, which is
+already used by an unrelated package on npm). The web client is `private: true` and is not
+published — it is built into `@piwebui/pi-web` as `client-dist`.
 
-For the first release:
+Releasing is one command:
 
-1. Decide whether the packages get published to npm. That is the only way to offer `npm i -g` instead
-   of clone-and-build; it means flipping `"private": true` in all four manifests, adding `repository`,
-   `publishConfig.access: public` for the scoped packages, and a `prepublishOnly` that runs
-   `npm run build`. Do not claim an npm install path before that is true and verified in a clean
-   environment.
-2. Update `CHANGELOG.md`: move the `Unreleased` section to `## [0.1.0] - YYYY-MM-DD`, keep the "known
-   state of the suites" table honest, and state the four failing smoke checks as known limitations.
-3. Bump all four package versions in one commit (`0.1.0`), tag `v0.1.0`, and push the tag.
-4. Create the GitHub release from the tag with the notes below (see the launch copy in the audit
-   document). Do not attach binaries; the artifact is the source tag plus, if published, npm.
+```bash
+# 1. bump all three manifests to the same version, commit
+# 2. tag it and push the tag
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+`.github/workflows/release.yml` then checks the tag against every manifest, runs
+`npm run build` and `npm run package:smoke` (pack → clean install → boot → authenticated
+probe), publishes in dependency order with `--provenance`, and prints the version the
+registry reports back. Nothing else publishes; pushing commits does not touch npm, because
+npm versions are immutable and a commit-triggered publish would fail on the next push.
+
+One-time bootstrap, per package, because npm cannot configure a trusted publisher for a
+package that does not exist yet: the first `npm publish` of each must be done locally with a
+granular token (`npm publish -w ./packages/shared --provenance` etc.), then on each package's
+npm page enable **Trusted Publishing → GitHub Actions** for repo `h8ntome/piweb`, workflow
+file `release.yml`. After that the tag flow needs no token at all. If you would rather skip
+trusted publishing, store a granular publish token as the repo secret `NPM_TOKEN`; the
+workflow already passes it through, and it is ignored when empty.
+
+Internal dependency ranges are caret versions (`^0.1.0`), not the `workspace:*` protocol:
+`npm pack` does not rewrite `workspace:*` in this layout, so a published tarball carrying it
+is uninstallable (`EUNSUPPORTEDPROTOCOL`). Bump all three manifests together.
+
+There is no published release yet and no tag; the version in every manifest is `0.1.0`.
 
 ## Verifying a claim before it reaches the README
 

@@ -27,7 +27,7 @@ Two structural notes first, because they shape everything else:
 | --- | --- | --- | --- | --- | --- |
 | 1 | Demo GIF | **PARTIAL** | Real screenshot captured from a live local build: `docs/assets/screenshot-login.png` (900×640, 65 KB), embedded near the top of `README.md`. No GIF encoder exists on this host (no `ffmpeg`, `gifski`, `gifsicle`, ImageMagick). | Screenshot in README with a caption stating it is the real app; `docs/DEMO_CAPTURE.md` with verified boot/allow/mint commands, the five frames to record, `agent-browser` sequence, and the exact `ffmpeg` encode line. | Record the GIF on a machine with an encoder, against mock-provider or publishable data (see doc §1 privacy warning). Replace the pending block. |
 | 2 | One-line value proposition | **PASS** | `README.md` first paragraph; reused in `docs/GITHUB_REPO_SETTINGS.md` as the GitHub description. | Kept the existing accurate line (it already states what/who/why); tightened the build comment. Social preview uses a short-form version. | none |
-| 3 | One-command install | **PARTIAL** | Verified in a clean clone: `npm ci` → `npm run build` → `./packages/server/bin/pi-web.mjs serve` now works. **Before this pass it did not**: `npm run build` emitted only the client, so `serve` died with `ERR_MODULE_NOT_FOUND @pi-web/pi-adapter/dist/index.js`. | Added root `build:packages` (shared, pi-adapter, server) and wired it into `npm run build`; README quick start now uses `npm ci` and describes what build does. | A true one-liner (`npm i -g pi-web` or `npx`) requires publishing: all four manifests are `"private": true`. Decision + approval needed; steps in `MAINTAINERS.md`. |
+| 3 | One-command install | **PARTIAL** | Verified in a clean clone: `npm ci` → `npm run build` → `./packages/server/bin/pi-web.mjs serve` now works. **Before this pass it did not**: `npm run build` emitted only the client, so `serve` died with `ERR_MODULE_NOT_FOUND @piwebui/pi-adapter/dist/index.js`. | Added root `build:packages` (shared, pi-adapter, server) and wired it into `npm run build`; README quick start now uses `npm ci` and describes what build does. | A true one-liner (`npm i -g pi-web` or `npx`) requires publishing: all four manifests are `"private": true`. Decision + approval needed; steps in `MAINTAINERS.md`. |
 | 4 | Live demo | **NOT APPLICABLE** (by design) | pi-web binds loopback and reads *the user's own* pi sessions; a hosted demo would need a shared pi install and would expose other people's session data. No hosted demo was claimed anywhere. | `docs/DEMO_CAPTURE.md` documents a local walkthrough path; README links it. | Optional: a screencast rather than a hosted instance. Do not build a multi-tenant demo. |
 | 5 | License | **PASS** | Correction to an earlier claim in this audit: I wrote that `LICENSE` existed. It does **not** — `ls LICENSE*` returns nothing. Only `"license": "MIT"` in the four manifests, which is a declaration without the required notice text. | Corrected this audit entry, then (with approval) added the standard MIT notice as `LICENSE`, copyright line `Copyright (c) 2026 h8ntome`, matching the `"license": "MIT"` already declared in all four manifests; added a README License section that also states the relationship to pi and the unrelated same-named npm packages. | Change the copyright line if `h8ntome` is not the name you want on the legal notice (one-line edit). |
 | 6 | GitHub topics | **PASS — applied** | `gh repo view --json repositoryTopics` → **20 topics** on `h8ntome/piweb`. | Repo created and configured directly (see *Publication* section). | none |
@@ -268,3 +268,51 @@ git rebase --onto github/main <old-tip>   # replays the lane's commits on the pu
 ```
 
 Or simply work from a fresh clone of `github.com/h8ntome/piweb` and re-apply whatever is still unfinished.
+
+
+## npm scope rename and release automation (later turn)
+
+`piwebui` was created as the npm organization (`npm org ls piwebui` → `h8notme - owner`).
+
+**Methodology correction, recorded because it caused earlier bad advice:** every claim in this
+document that an npm *organization* name was free was derived from
+`GET /-/v1/org/<name>`, and that endpoint answers `ResourceNotFound` even for orgs that certainly
+exist (`earendil-works`, `oh-my-pi`). It cannot be used to test availability. The only reliable
+checks available from a CLI are package-level (`GET /<pkg>` 404 = the package name is free) and,
+for an org you are a member of, `npm org ls <org>`. Unscoped-package and GitHub-repo conclusions in
+this document stand; the org conclusions did not, which is how `pi-web` and `piweb` came back as
+"taken" after I listed them as free.
+
+What changed in the tree:
+
+- Scope renamed across 25 files: `@pi-web/shared` → `@piwebui/shared`, `@pi-web/pi-adapter` →
+  `@piwebui/pi-adapter`, `@pi-web/server` → **`@piwebui/pi-web`** (the user-facing package),
+  client → `@piwebui/client` and stays private (it is built into the server package).
+- CLI binary renamed **`pi-web` → `piweb`**, because `pi-web` is already a bin provided by an
+  unrelated, actively released npm package and would collide on a global install.
+- The three publishable manifests lost `private: true` and gained `publishConfig.access`,
+  `prepublishOnly`, `license`, `repository`, `homepage`, `author`, `keywords`, `engines`.
+- Internal dependencies are caret ranges (`^0.1.0`). My first attempt used the `workspace:*`
+  protocol, which looked correct and typechecked fine, but **`npm pack` does not rewrite it in this
+  layout**, so the published tarball was uninstallable with `EUNSUPPORTEDPROTOCOL`. Caught by
+  installing the packed artifact into a clean prefix rather than trusting the build.
+- Root scripts now reference workspaces by path (`-w ./packages/server`) so a future rename cannot
+  break them.
+
+**The long-standing packaging blocker is now green.** `npm run package:smoke` had never passed in
+this repo's history (it failed on module resolution before, and after the `files` fix it still
+looked for the old bin name). It now reports
+`workspace build → packed → clean install → packed server boots and answers → package smoke passed`,
+and manually installing the three tarballs into a clean prefix gives: install 3.5 s, `node_modules/.bin/piweb`
+present, `/api/v1/health` → 401 (auth required by design) within ~2 s, `/` → 200 serving the built UI.
+
+`.github/workflows/release.yml` implements the requested automation: pushing a tag publishes. It
+refuses a tag that disagrees with the manifests, runs `build` + `package:smoke` as the gate, publishes
+in dependency order with `--provenance`, and then prints what the registry reports. Commit-triggered
+publishing is deliberately not implemented — npm versions are immutable, so a push-to-publish pipeline
+breaks on the second commit of every version.
+
+Still required before the first `npm publish`: npm cannot configure a trusted publisher for a package
+that does not exist, so the first publish of each package must be done by a human (local token or
+`NPM_TOKEN` secret), after which Trusted Publishing takes over for tags. And the repository is still
+**private**, which makes provenance attestation less useful than it will be once public.

@@ -1,7 +1,6 @@
 {
-  "name": "@pi-web/shared",
+  "name": "@piwebui/shared",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
@@ -13,7 +12,8 @@
     "typebox": "1.3.27"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json"
+    "build": "tsc -p tsconfig.json",
+    "prepublishOnly": "cd ../.. && npm run build"
   },
   "files": [
     "src",
@@ -25,6 +25,18 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/OWNER/pi-web.git"
-  }
+    "url": "git+https://github.com/h8ntome/piweb.git"
+  },
+  "description": "Shared types, schemas, wire frames and vendored colour math for pi-web.",
+  "publishConfig": {
+    "access": "public"
+  },
+  "homepage": "https://github.com/h8ntome/piweb#readme",
+  "author": "h8ntome",
+  "keywords": [
+    "pi",
+    "schemas",
+    "color",
+    "okhsl"
+  ]
 }

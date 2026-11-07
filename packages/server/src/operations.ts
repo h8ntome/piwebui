@@ -9,7 +9,7 @@
  * - This is deduplicated delivery within a known owner generation, not exactly-once execution.
  */
 import crypto from "node:crypto";
-import { canonicalJson, OPERATION_RETENTION_MS, type OperationReceipt, type OperationState } from "@pi-web/shared";
+import { canonicalJson, OPERATION_RETENTION_MS, type OperationReceipt, type OperationState } from "@piwebui/shared";
 import { Store } from "./store.ts";
 import type { SessionRec } from "./sessions.ts";
 

@@ -9,8 +9,8 @@
  * snapshot/subscribe gap.
  */
 import crypto from "node:crypto";
-import { SSE_HEARTBEAT_MS, SSE_MAX_BYTES, SSE_MAX_FRAMES } from "@pi-web/shared";
-import type { StreamEventName, StreamEnvelope } from "@pi-web/shared";
+import { SSE_HEARTBEAT_MS, SSE_MAX_BYTES, SSE_MAX_FRAMES } from "@piwebui/shared";
+import type { StreamEventName, StreamEnvelope } from "@piwebui/shared";
 
 export interface Subscriber {
   id: number;

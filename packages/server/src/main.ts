@@ -10,7 +10,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import os from "node:os";
 import crypto from "node:crypto";
-import { resolvePiPackage } from "@pi-web/pi-adapter";
+import { resolvePiPackage } from "@piwebui/pi-adapter";
 import { loadConfig, AuthService, saveConfigDir, type Config } from "./auth.ts";
 import { Store } from "./store.ts";
 import { ReadClient } from "./readClient.ts";
@@ -42,7 +42,7 @@ function parseFlags(argv: string[]): Record<string, string | boolean> {
 
 function clientDist(): string | null {
   for (const cand of [
-    path.join(HERE, "..", "client-dist"), // packed/installed: npm i -g @pi-web/server
+    path.join(HERE, "..", "client-dist"), // packed/installed: npm i -g @piwebui/pi-web
     path.join(HERE, "..", "dist"),
     path.join(HERE, "..", "..", "client", "dist"),
   ]) if (fs.existsSync(path.join(cand, "index.html"))) return cand;
@@ -195,7 +195,7 @@ export async function serve(flags: Record<string, string | boolean>) {
   const dist = clientDist();
   if (dist) serveStatic(app, dist);
   else {
-    app.get("/", async (_req, reply) => { reply.code(503).type("text/plain"); return "pi-web client not built yet (npm run build -w @pi-web/client)"; });
+    app.get("/", async (_req, reply) => { reply.code(503).type("text/plain"); return "pi-web client not built yet (npm run build -w @piwebui/client)"; });
   }
 
   await app.listen({ host: cfg.bind, port: cfg.port });

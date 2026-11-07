@@ -6,7 +6,7 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import fs from "node:fs";
 import path from "node:path";
-import { ERROR_HTTP_STATUS, MAX_REQUEST_BYTES, type ErrorCode } from "@pi-web/shared";
+import { ERROR_HTTP_STATUS, MAX_REQUEST_BYTES, type ErrorCode } from "@piwebui/shared";
 import { AuthService, COOKIE_NAME, parseCookies, type Config, type Principal } from "./auth.ts";
 import { ApiError } from "./commands.ts";
 import { logInfo, logWarn } from "./log.ts";

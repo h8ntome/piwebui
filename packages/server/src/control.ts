@@ -3,7 +3,7 @@
  * ONLY. They cannot and do not fence the terminal or other ordinary Pi processes.
  */
 import crypto from "node:crypto";
-import { CONTROL_TTL_MS, type ControlState } from "@pi-web/shared";
+import { CONTROL_TTL_MS, type ControlState } from "@piwebui/shared";
 import { Store } from "./store.ts";
 
 function h(s: string): string { return crypto.createHash("sha256").update(s).digest("hex"); }

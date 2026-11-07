@@ -1,7 +1,6 @@
 {
-  "name": "@pi-web/pi-adapter",
+  "name": "@piwebui/pi-adapter",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
@@ -10,7 +9,7 @@
     "./*": "./dist/*.js"
   },
   "dependencies": {
-    "@pi-web/shared": "*",
+    "@piwebui/shared": "^0.1.0",
     "tsx": "4.23.15"
   },
   "peerDependencies": {
@@ -20,7 +19,8 @@
     "@earendil-works/pi-coding-agent": "1.5.0"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json"
+    "build": "tsc -p tsconfig.json",
+    "prepublishOnly": "cd ../.. && npm run build"
   },
   "files": [
     "src",
@@ -32,6 +32,18 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/OWNER/pi-web.git"
-  }
+    "url": "git+https://github.com/h8ntome/piweb.git"
+  },
+  "description": "pi integration layer for pi-web: version gate, pure read worker, managed host, terminal bridge.",
+  "publishConfig": {
+    "access": "public"
+  },
+  "homepage": "https://github.com/h8ntome/piweb#readme",
+  "author": "h8ntome",
+  "keywords": [
+    "pi",
+    "bridge",
+    "sessions",
+    "read-worker"
+  ]
 }

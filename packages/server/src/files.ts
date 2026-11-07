@@ -10,7 +10,7 @@
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { MAX_FILE_VIEW_BYTES, type FileView } from "@pi-web/shared";
+import { MAX_FILE_VIEW_BYTES, type FileView } from "@piwebui/shared";
 import { ApiError } from "./commands.ts";
 
 const DENY_BASENAME = /^(\.env(\..*)?|id_rsa(\.pub)?|id_ed25519(\.pub)?|.*\.pem|auth\.json|\.netrc|\.npmrc)$/i;

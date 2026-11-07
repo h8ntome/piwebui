@@ -33,13 +33,13 @@ import {
   type SnapshotPayload,
   type ToolStateView,
   type WorkspaceInfo,
-} from "@pi-web/shared";
+} from "@piwebui/shared";
 import { Store } from "./store.ts";
 import { type Config } from "./auth.ts";
 import { ReadClient } from "./readClient.ts";
 import { StreamHub } from "./hub.ts";
 import type { Driver } from "./drivers.ts";
-import { LfFramer, decodeRecord, classifyChange, type FileIdentity } from "@pi-web/pi-adapter/tail";
+import { LfFramer, decodeRecord, classifyChange, type FileIdentity } from "@piwebui/pi-adapter/tail";
 import { logInfo, logWarn } from "./log.ts";
 import crypto from "node:crypto";
 
@@ -219,7 +219,7 @@ export class Sessions {
 
   private async loadFileOnce(rec: SessionRec) {
     try {
-      const page = await this.read.call<import("@pi-web/shared").EntryPage>("pageTail", { file: rec.path!, limit: 50 });
+      const page = await this.read.call<import("@piwebui/shared").EntryPage>("pageTail", { file: rec.path!, limit: 50 });
       rec.file.exists = true;
       rec.file.genId = page.fileGeneration;
       rec.state.entryCount = page.entryCount;
