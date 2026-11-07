@@ -55,6 +55,7 @@ jobs:
           echo "tag v$tag matches every manifest"
 
       - name: Build and package gate
+        timeout-minutes: 8
         run: |
           npm run build
           npm run package:smoke

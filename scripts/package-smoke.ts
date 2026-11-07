@@ -46,18 +46,21 @@ const dataDir = path.join(tmp, "data");
 const PORT = 4096 + Math.floor(Math.random() * 4096);
 const bin = path.join(install, "node_modules/.bin/piweb");
 if (!fs.existsSync(bin)) { fail("packed bin piweb missing"); process.exit(1); }
-const srv = spawn(bin, ["serve", "--port", String(PORT), "--data-dir", dataDir], { cwd: install, stdio: ["ignore", "pipe", "pipe"] });
+const srv = spawn(bin, ["serve", "--port", String(PORT), "--data-dir", dataDir], { cwd: install, stdio: ["ignore", "pipe", "pipe"], detached: true });
 let out = "";
-srv.stdout.on("data", (d) => { out += d; });
-srv.stderr.on("data", (d) => { out += d; });
+srv.stdout?.on("data", (d) => { out += d; });
+srv.stderr?.on("data", (d) => { out += d; });
+srv.unref();
 let up = false;
-for (let i = 0; i < 120; i++) {
+for (let i = 0; i < 60; i++) {
   await new Promise((r) => setTimeout(r, 1000));
   try { const r = await fetch(`http://127.0.0.1:${PORT}/api/v1/health`); if (r.status === 401 || r.ok) { up = true; break; } } catch { /* not yet */ }
 }
 if (!up) { fail(`packed server did not answer within boot window`); console.error(out.slice(0, 800)); }
 else ok("packed server boots and answers");
-srv.kill("SIGKILL");
+try { process.kill(-(srv.pid ?? 1), "SIGKILL"); } catch { /* gone */ }
+try { srv.kill("SIGKILL"); } catch { /* gone */ }
 
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(process.exitCode ? "package smoke FAILED" : "package smoke passed");
+process.exit(process.exitCode ?? 0);
