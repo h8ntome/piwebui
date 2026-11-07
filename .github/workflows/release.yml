@@ -34,6 +34,7 @@ jobs:
           node-version: "24.x"
           registry-url: https://registry.npmjs.org
           cache: npm
+          # scope: @piwebui   # uncomment only if you switch back to a stored NPM_TOKEN
 
       - name: Install
         run: npm ci
@@ -68,8 +69,12 @@ jobs:
             npm publish -w "./packages/$p" --provenance --access public
             echo "::endgroup::"
           done
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        # No token here on purpose: npm publishes from CI via the OIDC id-token above
+        # (Trusted Publishing). If you prefer a token instead, generate an **Automation**
+        # access token (a login token is refused with EOTP when 2FA is on), store it as the
+        # repo secret NPM_TOKEN, and uncomment:
+        #   env:
+        #     NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Show what landed
         run: |
