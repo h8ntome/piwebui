@@ -13,7 +13,9 @@ pi-web never executes tools, never talks to a model provider, and never writes s
 reaches pi through pi's own interfaces: an opt-in bridge extension for the `pi` you already have open in
 a terminal, or managed `pi` SDK child processes for sessions you start in the browser.
 
-![pi-web at 127.0.0.1:4319](docs/assets/screenshot-login.png)
+![pi-web viewing a session: the workspace's session list on the left; on the right, pi thinks, reads and greps the code, edits the fix, runs the tests and commits it](docs/assets/screenshot-main.png)
+
+*Viewing a session in an allowlisted workspace — synthetic demo data, real UI.*
 
 ## Install
 

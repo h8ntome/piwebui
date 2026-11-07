@@ -27,6 +27,14 @@ section with a dated entry.
 - `CODE_OF_CONDUCT.md` and `.editorconfig`.
 - Unit-suite goldens pinning the vendored OKHSL math against the upstream reference implementation.
 
+### Changed
+
+- The README now leads with the main UI instead of the login card: `docs/assets/screenshot-main.png`
+  shows a session transcript (session list, thinking, tool calls with results, markdown, the follow-up
+  commit) captured from a real local build at 1600x1000 @2x against synthetic demo data. The login
+  still stays in `docs/assets/` as frame 1 for the planned GIF, and `docs/DEMO_CAPTURE.md` §0 records
+  how the still is reproduced.
+
 ### Fixed
 
 - **Theme colors rendered as clipped primaries.** `chromaStops()` in the vendored OKHSL code was

@@ -2,7 +2,33 @@
 
 Status: **not recorded yet.** These are the commands that were run and verified while preparing this
 document, so the capture is a mechanical follow-up rather than an open question. Nothing here is
-invented: the server boots, the login flow works, and the screenshot in the README came from step 3.
+invented: the server boots, the login flow works, and the login card frame came from step 3. The
+README currently leads with a still of the main UI instead — §0 reproduces it.
+
+## 0. The main-UI still (currently in the README)
+
+`docs/assets/screenshot-main.png` is the real application at 1600x1000 @2x, viewing a **synthetic**
+workspace: a fabricated project directory and hand-written session JSONL, so no one's real prompts,
+paths or project names end up in a public repo.
+
+```bash
+npm ci && npm run build
+# one synthetic project + five synthetic sessions (hero.jsonl is the one in the shot),
+# written into <agentDir>/sessions/--<cwd-slug>--/ with staggered file mtimes
+node /path/to/gen-demo-sessions.mjs
+./packages/server/bin/pi-web.mjs allow /tmp/lightlog --data-dir /tmp/piweb-demo/state
+./packages/server/bin/pi-web.mjs serve --port 4477 --data-dir /tmp/piweb-demo/state --agent-dir /tmp/piweb-demo/agent
+
+agent-browser --session piweb-shot set viewport 1600 1000 2
+agent-browser --session piweb-shot open http://127.0.0.1:4477/   # sign in with a freshly minted code
+agent-browser --session piweb-shot snapshot -i                    # click the session ROW, not the list container
+agent-browser --session piweb-shot screenshot docs/assets/screenshot-main.png
+agent-browser --session piweb-shot close
+```
+
+The session rows re-render with new refs on every navigation, and the list container carries the same
+label text as its rows — match the row button, then re-snapshot before clicking again.
+
 
 ## 1. Build, then boot an isolated instance
 
