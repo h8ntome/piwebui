@@ -1,18 +1,28 @@
 name: release
 
-# Pushing a tag publishes to npm automatically — no separate release step.
+# Every commit updates npm.
 #
-#   git tag v0.1.0 && git push origin v0.1.0
+#   push to main  -> publish a canary build to the `next` dist-tag (versions like
+#                    0.1.1-canary.57.9f3c2ab). `latest` is untouched, so nobody
+#                    installs an unreleased commit by accident.
+#   push a tag    -> publish the stable version named by the tag to `latest`.
 #
-# The tag must match the version in the package manifests (checked below), and the
-# packaging gate that runs first is the same one that passes locally
-# (`npm run package:smoke`: pack -> clean install -> boot -> authed probe).
+#     git tag v0.1.1 && git push origin v0.1.1
+#
+# Both paths run the same gate first (`npm run build` then `npm run package:smoke`:
+# pack -> clean install -> boot -> authed probe), so a commit that does not produce a
+# working artifact does not get published at all. Concurrency is serialised because npm
+# versions are immutable and two parallel publishes of the same version lose.
+#
+# Canary versions are stamped inside the job only — nothing is committed back, so main's
+# manifests stay at the last released version and canaries never collide with a future
+# stable release. The three manifests must carry the same version either way.
 #
 # Auth: npm Trusted Publishing (OIDC) via `--provenance`, so no npm token is stored
 # in repository secrets. npm cannot create a trusted-publisher config for a package
 # that does not exist yet (npm/cli#8544), so the *first* publish of each package is a
 # one-time manual step — see MAINTAINERS.md. Once a package exists and the publisher is
-# registered, every later tag publishes itself with no secret at all.
+# registered, every later publish needs no secret at all.
 #
 # A brand-new package under OIDC-only auth fails with a misleading `EOTP` (provenance is
 # signed to the transparency log first, then the publish is refused). The Preflight step
@@ -25,12 +35,18 @@ name: release
 
 on:
   push:
+    branches:
+      - main
     tags:
       - "v*"
 
 permissions:
   contents: read
   id-token: write
+
+concurrency:
+  group: npm-publish
+  cancel-in-progress: false
 
 jobs:
   publish:
@@ -50,7 +66,36 @@ jobs:
       - name: Install pi at the validated version (the packaging gate boots the real server)
         run: npm install -g @earendil-works/pi-coding-agent@1.5.0
 
+      - name: Resolve release kind
+        id: kind
+        run: |
+          set -euo pipefail
+          base=$(node -p "require('./packages/shared/package.json').version")
+          for p in pi-adapter server; do
+            v=$(node -p "require('./packages/$p/package.json').version")
+            if [ "$v" != "$base" ]; then
+              echo "::error::packages/$p is $v but packages/shared is $base; all three must match."
+              exit 1
+            fi
+          done
+          if [ "${{ github.ref_type }}" = tag ]; then
+            kind=stable; dist=latest; ver="${GITHUB_REF_NAME#v}"
+            echo "base=$base" >> "$GITHUB_OUTPUT"
+          else
+            # patch+1 as a prerelease: always newer than the released stable, always older
+            # than that same patch promoted to stable later.
+            major=${base%%.*}; rest=${base#*.}; minor=${rest%%.*}; patch=${rest##*.}
+            kind=canary; dist=next
+            ver="$major.$minor.$((patch + 1))-canary.$GITHUB_RUN_NUMBER.${GITHUB_SHA:0:7}"
+            echo "base=$base" >> "$GITHUB_OUTPUT"
+          fi
+          echo "kind=$kind"    >> "$GITHUB_OUTPUT"
+          echo "tag=$dist"     >> "$GITHUB_OUTPUT"
+          echo "version=$ver"  >> "$GITHUB_OUTPUT"
+          echo "$kind build: $ver -> dist-tag $dist (manifests at $base)"
+
       - name: Refuse a tag that does not match the manifests
+        if: steps.kind.outputs.kind == 'stable'
         run: |
           set -euo pipefail
           tag="${GITHUB_REF_NAME#v}"
@@ -62,6 +107,10 @@ jobs:
             fi
           done
           echo "tag v$tag matches every manifest"
+
+      - name: Stamp the canary version (CI only, never committed)
+        if: steps.kind.outputs.kind == 'canary'
+        run: node scripts/set-canary-version.mts "${{ steps.kind.outputs.base }}" "${{ steps.kind.outputs.version }}"
 
       - name: Resolve publish auth
         id: auth
@@ -116,13 +165,24 @@ jobs:
           [ "${{ steps.auth.outputs.mode }}" = token ] && provenance=()
           for p in shared pi-adapter server; do
             echo "::group::publish packages/$p"
-            npm publish -w "./packages/$p" "${provenance[@]}" --access public
+            npm publish -w "./packages/$p" "${provenance[@]}" --access public --tag "${{ steps.kind.outputs.tag }}"
             echo "::endgroup::"
           done
 
       - name: Show what landed
         run: |
           sleep 20
+          ver="${{ steps.kind.outputs.version }}"
+          {
+            echo "## ${{ steps.kind.outputs.kind }} publish ${ver}"
+            echo
+            echo "| package | ${{ steps.kind.outputs.tag }} |"
+            echo "| --- | --- |"
+          } >> "$GITHUB_STEP_SUMMARY"
           for n in @piwebui/shared @piwebui/pi-adapter @piwebui/pi-web; do
-            printf "%-22s %s\n" "$n" "$(npm view "$n" version 2>/dev/null || echo 'not visible yet')"
+            got=$(npm view "$n" "${{ steps.kind.outputs.tag }}.version" 2>/dev/null || npm view "$n" version 2>/dev/null || echo 'not visible yet')
+            printf "%-22s %s\n" "$n" "$got"
+            echo "| \`$n\` | \`$got\` |" >> "$GITHUB_STEP_SUMMARY"
           done
+          echo >> "$GITHUB_STEP_SUMMARY"
+          echo 'Install a canary build with `npm install -g @piwebui/pi-web@next`.' >> "$GITHUB_STEP_SUMMARY"

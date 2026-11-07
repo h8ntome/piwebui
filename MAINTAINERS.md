@@ -33,27 +33,37 @@ answered produces a worse repository than leaving them open.
 ## Release process (automated)
 
 npm packages live under the `piwebui` org: `@piwebui/shared`, `@piwebui/pi-adapter` and
-`@piwebui/pi-web` (the server + CLI). The command is **`pi-web`** — bare `pi-web` starts the server
-and opens the browser, mirroring `dsh web` — with **`piweb`** kept as a compatibility alias. Heads-up
-when installing globally: an unrelated package also named `pi-web` (unscoped, by another author)
-publishes a `pi-web` bin, so installing both competes for the same command name and npm will silently
-keep whichever link was written last. That collision is the original reason the bin was `piweb`; if it
-bites a user, the fix is to uninstall one of the two packages, not to rename ours again. The web client
-is `private: true` and is not published — it is built into `@piwebui/pi-web` as `client-dist`.
+`@piwebui/pi-web` (the server + CLI; `bin` is `piweb`, deliberately not `pi-web`, which is
+already used by an unrelated package on npm). The web client is `private: true` and is not
+published — it is built into `@piwebui/pi-web` as `client-dist`.
 
-Releasing is one command:
+Every commit to `main` and every version tag publishes — `.github/workflows/release.yml` handles
+both, and both run the same gate first (`npm run build` then `npm run package:smoke`: pack → clean
+install → boot → authenticated probe), so a commit that does not produce a working artifact never
+reaches npm.
+
+| push | version | dist-tag | install |
+| --- | --- | --- | --- |
+| `main` | `0.1.1-canary.<run>.<sha>` | `next` | `npm i -g @piwebui/pi-web@next` |
+| tag `v0.1.1` | `0.1.1` | `latest` | `npm i -g @piwebui/pi-web` |
+
+A stable release is still one command:
 
 ```bash
 # 1. bump all three manifests to the same version, commit
 # 2. tag it and push the tag
-git tag v0.1.0 && git push origin v0.1.0
+git tag v0.1.1 && git push origin v0.1.1
 ```
 
-`.github/workflows/release.yml` then checks the tag against every manifest, runs
-`npm run build` and `npm run package:smoke` (pack → clean install → boot → authenticated
-probe), publishes in dependency order with `--provenance`, and prints the version the
-registry reports back. Nothing else publishes; pushing commits does not touch npm, because
-npm versions are immutable and a commit-triggered publish would fail on the next push.
+Canary versions are stamped inside the job by `scripts/set-canary-version.mts` and never committed,
+so main's manifests keep the last released version and a canary can never collide with a future
+stable. The script also pins the internal `@piwebui/*` ranges to the canary version, so a canary
+server cannot resolve its own dependencies to an older stable release. The workflow refuses to run
+either path unless all three manifests carry the same version; the tag must match it too.
+
+Publishes are serialised (`concurrency: npm-publish`) because npm versions are immutable, and the
+`latest` tag is only ever moved by a tag push, so main's churn can never become what a normal
+`npm install -g` picks up.
 
 One-time bootstrap, per package, because npm cannot configure a trusted publisher for a
 package that does not exist yet (npm/cli#8544) — a CI publish of a brand-new package fails
@@ -80,9 +90,12 @@ Internal dependency ranges are caret versions (`^0.1.0`), not the `workspace:*` 
 `npm pack` does not rewrite `workspace:*` in this layout, so a published tarball carrying it
 is uninstallable (`EUNSUPPORTEDPROTOCOL`). Bump all three manifests together.
 
-Nothing is on the registry yet. The tag `v0.1.0` is pushed (at `3265ba7`); its release run built
-and passed the packaging gate, then died at `npm publish` with `EOTP` for exactly the reason
-above. The version in every manifest is still `0.1.0`, so the bootstrap can publish it as-is.
+`0.1.0` is live on npm (published 2026-11-07 from the `v0.1.0` tag commit `3265ba7`, by hand with a
+granular token, so those three tarballs carry **no** provenance attestation — releases from here on
+via OIDC will). The tag's own CI run had failed with `EOTP` for exactly the bootstrap reason below.
+Expect a `404` from `npm view`/`GET` for up to a minute after a successful publish: the registry's
+read replica lags the write, while `PUT` already refuses the same version. Verify with
+`npm access get status <pkg>` if you are unsure whether a publish landed.
 
 ## Verifying a claim before it reaches the README
 
