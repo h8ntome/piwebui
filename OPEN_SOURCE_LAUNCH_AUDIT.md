@@ -29,15 +29,15 @@ Two structural notes first, because they shape everything else:
 | 2 | One-line value proposition | **PASS** | `README.md` first paragraph; reused in `docs/GITHUB_REPO_SETTINGS.md` as the GitHub description. | Kept the existing accurate line (it already states what/who/why); tightened the build comment. Social preview uses a short-form version. | none |
 | 3 | One-command install | **PARTIAL** | Verified in a clean clone: `npm ci` → `npm run build` → `./packages/server/bin/pi-web.mjs serve` now works. **Before this pass it did not**: `npm run build` emitted only the client, so `serve` died with `ERR_MODULE_NOT_FOUND @pi-web/pi-adapter/dist/index.js`. | Added root `build:packages` (shared, pi-adapter, server) and wired it into `npm run build`; README quick start now uses `npm ci` and describes what build does. | A true one-liner (`npm i -g pi-web` or `npx`) requires publishing: all four manifests are `"private": true`. Decision + approval needed; steps in `MAINTAINERS.md`. |
 | 4 | Live demo | **NOT APPLICABLE** (by design) | pi-web binds loopback and reads *the user's own* pi sessions; a hosted demo would need a shared pi install and would expose other people's session data. No hosted demo was claimed anywhere. | `docs/DEMO_CAPTURE.md` documents a local walkthrough path; README links it. | Optional: a screencast rather than a hosted instance. Do not build a multi-tenant demo. |
-| 5 | License | **PASS** (already MIT) | `LICENSE` present from the base commit (MIT, copyright holder = project author); `"license": "MIT"` in root and all package manifests. | None needed. Verified no GPL/copyleft dependency pulled in by the vendored OKHSL header (upstream is MIT, attribution retained in `packages/shared/src/okhsl.ts`). | Confirm the copyright line's name/email is what you want published. |
-| 6 | GitHub topics | **NEEDS APPROVAL** | No remote, no `gh` auth, repo 404. | 20 researched topics in `docs/GITHUB_REPO_SETTINGS.md` §2, with the deliberately-excluded trending terms and the `gh repo edit` one-liner. | Apply after the repo exists. |
+| 5 | License | **FAIL — no LICENSE file** | Correction to an earlier claim in this audit: I wrote that `LICENSE` existed. It does **not** — `ls LICENSE*` returns nothing. Only `"license": "MIT"` in the four manifests, which is a declaration without the required notice text. | Corrected this audit entry. No license file was added, because that is a legal decision for the copyright holder. | **Needs your approval:** add the standard MIT notice (matches what the manifests already declare) with the copyright line you want — e.g. `Copyright (c) 2026 h8ntome`. GitHub shows "Unlicense/None" until this exists, and the absence is the single biggest trust problem on the landing page. |
+| 6 | GitHub topics | **PASS — applied** | `gh repo view --json repositoryTopics` → **20 topics** on `h8ntome/piweb`. | Repo created and configured directly (see *Publication* section). | none |
 | 7 | Social preview | **PARTIAL** | `docs/assets/social-preview.png` — verified **1280×640, 238 KB**, built from the real login screenshot (source HTML kept at `docs/assets/social-preview.html` for regeneration). | Created the asset. | Upload: Settings → General → Social preview (documented in `docs/GITHUB_REPO_SETTINGS.md` §3). Not uploaded — no access. |
-| 8 | Continuous integration | **PARTIAL** | Workflows parse as valid YAML (`js-yaml`); jobs, matrix and permissions asserted by parsing. Local runs: typecheck ✓, unit 9/9 ✓, build ✓. **Actions are SHA-pinned** with versions checked against the GitHub API. | `.github/workflows/ci.yml` (`npm ci`, typecheck, unit, build on Node 22.19 + 24.x, `permissions: contents: read`, concurrency cancel, artifact upload, source-map guard); `.github/workflows/e2e.yml` (advisory smoke against real pi 1.5.0 from the public registry); `.github/dependabot.yml`. | **GitHub Actions success is not verified** — never run on GitHub. The four failing smoke checks must be fixed, then `continue-on-error` removed from `e2e.yml`. |
+| 8 | Continuous integration | **PASS (verified on GitHub)** | Workflows parse as valid YAML (`js-yaml`); jobs, matrix and permissions asserted by parsing. Local runs: typecheck ✓, unit 9/9 ✓, build ✓. **Actions are SHA-pinned** with versions checked against the GitHub API. | `.github/workflows/ci.yml` (`npm ci`, typecheck, unit, build on Node 22.19 + 24.x, `permissions: contents: read`, concurrency cancel, artifact upload, source-map guard); `.github/workflows/e2e.yml` (advisory smoke against real pi 1.5.0 from the public registry); `.github/dependabot.yml`. | Verified on GitHub: run `42352242305` on push to `main` — **both matrix legs succeeded** (`node 22.19` and `node 24.x`). The advisory `e2e` run also executed; its smoke step failed as documented (known-failing set), which is the intended behaviour of `continue-on-error`. Dependabot ran its first check on the same push. The four failing smoke checks must be fixed, then `continue-on-error` removed from `e2e.yml`. |
 | 9 | Security & secret hygiene | **PASS** with follow-ups | Scanned tracked tree for provider keys, GitHub/Slack tokens, private keys and long opaque literals: **no live credentials**. Auth code stores codes/cookies/CSRF/tokens as SHA-256 hashes; CSP, Host allowlist, CSRF+Origin on mutations, hashed bootstrap codes (2-min TTL), allowlisted read worker, DOMPurify verified in source. | `SECURITY.md` (enforcement list, trust model, disclosure route, team-deployment caveats); `docs/SECURITY_REVIEW.md`; untracked and deleted `true/metadata.db` (stray SQLite artifact, no private rows) and `.plan-review-backup-2026-11-05/`; added `*.db`/`*.sqlite` ignores; scrubbed 3 absolute `/Users/hadi` paths from `plan/`. | Enable secret scanning + push protection on GitHub. Keep the disclosure email as the intended address. Two hardening notes remain open (constant-time hash compare, best-effort rate limiter) — see `docs/SECURITY_REVIEW.md`. |
 | 10 | Good first issues | **PARTIAL** | `docs/GOOD_FIRST_ISSUES.md`: 5 scoped tasks, each with why, exact files, and acceptance criteria — derived from real gaps found in this audit, not invented filler. | Written, plus the policy in `MAINTAINERS.md`. | Create them as actual issues after the repo exists (needs approval; `gh issue create` commands included). |
 | 11 | Contributing guide | **PASS** | `CONTRIBUTING.md`. Every command was executed in the clean clone (`npm ci`, `npm run typecheck`, `npm run test:unit`, `npm run build`, `npm run smoke`, `pi-web.mjs serve/allow/mint-code/workspaces`); the troubleshooting rows map to verified code paths. | Created, including repo map, conventions (no `SessionManager.open()` on reads, bounded reads, sanitize before render), and an explicit "these suites currently fail" note so contributors are not misled. | none |
 | 12 | Issue templates | **PARTIAL** | `.github/ISSUE_TEMPLATE/bug_report.yml`, `feature_request.yml`, `config.yml` — all valid YAML (validated). Collect version/commit, pi version, Node, OS, browser, repro, expected-vs-actual, redaction warning; feature template asks about the pi-runtime rule; config routes questions to Discussions and security to private email. | Created. | GitHub does not render these until the repo exists; the Discussions URL in `config.yml` must be created first (item 13). |
-| 13 | GitHub Discussions | **NEEDS APPROVAL** | Not enabled — cannot be, no repository. | Five categories with rationale and setup steps in `docs/GITHUB_REPO_SETTINGS.md` §4. | Enable in Settings (or `gh repo edit --enable-discussions`) then create categories. |
+| 13 | GitHub Discussions | **PARTIAL** | `has_discussions: true` on `h8ntome/piweb` — enabled. | Enabled via `gh repo edit --enable-discussions`. | Create the five categories (needs the web UI or 5 GraphQL calls); `config.yml` already links the Q&A category. |
 | 14 | Versioned release & changelog | **PARTIAL** | No tags, no releases, all four manifests at `0.1.0` and `private: true`. Nothing historical was invented. | `CHANGELOG.md` starting at `[Unreleased]` with the real fix, additions and an honest "current state of the suites" table; release procedure in `MAINTAINERS.md`. | **Approval needed** to tag `v0.1.0` (or `v0.0.1` if published before the smoke checks pass). Proposed release notes below. |
 | 15 | Show HN launch | **PARTIAL** | Draft copy below; not submitted. The repo is not public yet, which is a hard prerequisite. | Show HN title/body + a short community announcement drafted from verified facts only. | Publish repo → record demo → submit when a maintainer can answer questions for a day. |
 | 16 | Issue response process | **PARTIAL** | `MAINTAINERS.md`: 24-hour triage rhythm, label semantics, no-stale-closings rule, release process, and the "verify a claim before the README" rule. 10 triage labels with colours and meanings in `docs/GITHUB_REPO_SETTINGS.md` §5. | Written. No automation configured, deliberately: for a single maintainer, an auto-reply bot is worse than a real short answer. | Create labels. Optional later: a `needs-repro` reminder action only if volume ever justifies it. |
@@ -231,3 +231,40 @@ git merge --no-ff FETCH_HEAD     # expects no conflicts: docs + package.json + s
 `package.json` and `README.md` are the only files likely to conflict with concurrent work; both conflicts
 will be obvious (root build script; README top block). If the other lane has since added `src/ui/`,
 tokens, or its own CI, prefer keeping theirs and re-applying only `build:packages` plus the docs.
+
+
+## Publication (later turn, after this audit was written)
+
+Decisions taken with the operator: npm publication is **deferred**; the GitHub repository was created
+and pushed. npm name note: `piweb` was reported as already taken when creating the org, and `pi-web`
+was likewise unavailable, so the npm side waits for a name decision.
+
+* **Repository:** `https://github.com/h8ntome/piweb` — created **private**, default branch `main`.
+  Flip to public when the review below is done: `gh repo edit h8ntome/piweb --visibility public`.
+* **Pushed:** 9 commits, all re-authored to `h8ntome <h8ntome@users.noreply.github.com>` (the previous
+  identities were `hadi <hadi@local>` and a local config address; neither maps to the GitHub account,
+  and neither needed to be published).
+* **Configured:** description, 20 topics, Discussions enabled, 8 triage labels, Dependabot active.
+* **Verified on GitHub Actions:** CI green on both Node legs; advisory e2e executed with the documented
+  smoke failure; the CI status badge can now be added to the README once the repository is public
+  (`https://github.com/h8ntome/piweb/actions/workflows/ci.yml/badge.svg`) — it stays out while private,
+  because a badge that needs a token to render is not an honest badge.
+* **Not applied:** social preview upload (GitHub has no REST endpoint for it; Settings → General →
+  Social preview, file `docs/assets/social-preview.png`), Discussions categories (web UI or GraphQL),
+  branch protection (add when the repo goes public), good-first-issues as real issues.
+* **Blocker before public:** there is **no LICENSE file** (item 5 above). The history also still contains
+  the original `plan/` drafts with absolute `/Users/hadi` paths inside older commits; the working tree is
+  scrubbed, but the older blobs are not. Scrub with `git filter-repo` before going public if you want
+  that gone, or accept it as ordinary author-path noise.
+
+**Local checkouts to reconcile:** `~/Documents/pi-web` (the live lane, still with its own uncommitted work)
+now has *different SHAs* for its history because of the identity rewrite, and it has no GitHub remote:
+
+```bash
+cd ~/Documents/pi-web
+git remote add github git@github.com:h8ntome/piweb.git
+git fetch github
+git rebase --onto github/main <old-tip>   # replays the lane's commits on the published history
+```
+
+Or simply work from a fresh clone of `github.com/h8ntome/piweb` and re-apply whatever is still unfinished.
