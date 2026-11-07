@@ -1,12 +1,12 @@
 # Repository settings — apply once, in the GitHub UI or with `gh`
 
-Nothing in this file could be applied automatically: at review time the repository had **no git remote**
-and `github.com/h8ntome/piwebui` returned 404, so the GitHub repository does not exist yet and there
-was no authenticated `gh` session. Everything below is therefore prepared, not applied.
+The repository is now public as **`github.com/h8ntome/piwebui`** and the items below are marked inline
+as applied or still outstanding. (At the time this file was first written the project had no git remote
+at all, which is why it reads as a checklist rather than a record.)
 
 The docs assume the repository will be published as `github.com/h8ntome/piwebui`. `CONTRIBUTING.md` carries the matching clone URL.
 
-## 1. Create the repository
+## 1. Create the repository — DONE
 
 ```bash
 # from the working checkout
@@ -23,7 +23,7 @@ sessions — pi stays the only runtime and the only writer of session files.` **
 first; there is no hosted demo). Check **Include for this repository** → merge settings: *Allow squash
 merging* only, to match CONTRIBUTING.
 
-## 2. Topics (checklist item 6)
+## 2. Topics — DONE (20 applied)
 
 Settings → General → About → ⚙ (or `gh repo edit h8ntome/piwebui --add-topic ...`):
 
@@ -36,13 +36,13 @@ session-viewer, llm, monorepo
 Rules applied: 20 topics maximum, all descriptive of what the code actually is; no trending terms the
 project does not deliver (deliberately absent: `mcp`, `rag`, `gpt`, `automation`, `llm-ui`).
 
-## 3. Social preview (checklist item 7)
+## 3. Social preview — NOT YET APPLIED
 
 Settings → General → Social preview → Image → upload `docs/assets/social-preview.png` (1280×640).
 Then hard-refresh the card with `?v=2` in a picker preview. Do not claim the card works until
 `https://github.com/h8ntome/piwebui` renders the image in a Slack/Discord/Twitter preview.
 
-## 4. GitHub Discussions (checklist item 13)
+## 4. GitHub Discussions — ENABLED, categories pending
 
 Settings → General → Features → **Discussions** → *Set up discussions*. Categories:
 
@@ -57,7 +57,7 @@ Settings → General → Features → **Discussions** → *Set up discussions*. 
 Also tick *Enable upvotes* and add a `docs/` link in the discussion banner. Keep the issue template
 banner pointing at Discussions for questions, which `.github/ISSUE_TEMPLATE/config.yml` already does.
 
-## 5. Triage labels (checklist item 16)
+## 5. Triage labels — DONE (8 created)
 
 Create the labels that the templates and `MAINTAINERS.md` reference (GitHub ships `bug`, `documentation`,
 `duplicate`, `question`, `wontfix`; add the rest):
@@ -77,7 +77,7 @@ Create the labels that the templates and `MAINTAINERS.md` reference (GitHub ship
 
 `gh label create "<name>" --color <code> --repo h8ntome/piwebui --description "<meaning>"` for each.
 
-## 6. Branch protection and secrets scanning
+## 6. Branch protection and secret scanning — OUTSTANDING
 
 - Settings → Branches → *Add branch protection rule* for `main`: require a passing `build` job from
   CI, require branches to be up to date, allow force pushes off, do not allow deletions. Keep it on

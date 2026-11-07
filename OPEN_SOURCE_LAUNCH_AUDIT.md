@@ -6,8 +6,11 @@ against the checklist at <https://settl.fyi/social/open-source-repo-checklist>.
 **Base commit audited:** `b57ccc8` (tip of `main`).
 **Work branch:** `oss-readiness` in `/Users/hadi/work/pi-web-oss`, commits `933c7b5` (code fix) and the
 follow-up documentation/hygiene commit.
-**Nothing was pushed, published, tagged, or submitted anywhere.** The repository has **no git remote**
-and `github.com/h8ntome/piwebui` returns 404, so every GitHub-side item below is prepared, not applied.
+At the moment this section was first written the project had no git remote and nothing had been pushed,
+published, tagged or submitted, so every GitHub-side item was prepared rather than applied. That has
+since changed: the repository is public as `github.com/h8ntome/piwebui`, the npm scope is `piwebui`, and
+the later sections at the end of this file record what actually happened. Where a row below still says
+"needs approval", read it together with those later sections.
 
 Two structural notes first, because they shape everything else:
 
