@@ -31,9 +31,9 @@ section with a dated entry.
 
 - The README now leads with the main UI instead of the login card: `docs/assets/screenshot-main.png`
   shows a session transcript (session list, thinking, tool calls with results, markdown, the follow-up
-  commit) captured from a real local build at 1600x1000 @2x against synthetic demo data. The login
-  still stays in `docs/assets/` as frame 1 for the planned GIF, and `docs/DEMO_CAPTURE.md` §0 records
-  how the still is reproduced.
+  commit) captured from a real local build at 1600x1000 @2x against synthetic demo data. No login-page
+  image is shipped any more: `docs/assets/screenshot-login.png` was deleted, and the social preview was
+  re-rendered around the new still. `docs/DEMO_CAPTURE.md` §0 records how both are reproduced.
 
 ### Fixed
 

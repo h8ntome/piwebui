@@ -2,8 +2,9 @@
 
 Status: **not recorded yet.** These are the commands that were run and verified while preparing this
 document, so the capture is a mechanical follow-up rather than an open question. Nothing here is
-invented: the server boots, the login flow works, and the login card frame came from step 3. The
-README currently leads with a still of the main UI instead — §0 reproduces it.
+invented: the server boots, and the login flow works. The README currently leads with a still of the
+main UI instead — §0 reproduces it. No login-card image is checked in any more (step 3 regenerates one
+in seconds if frame 1 of the GIF needs it).
 
 ## 0. The main-UI still (currently in the README)
 
