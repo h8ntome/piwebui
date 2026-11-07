@@ -30,13 +30,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/h8ntome/piweb.git"
+    "url": "git+https://github.com/h8ntome/piwebui.git"
   },
   "description": "pi-web server and CLI: local-first browser view and control surface for pi coding-agent sessions.",
   "publishConfig": {
     "access": "public"
   },
-  "homepage": "https://github.com/h8ntome/piweb#readme",
+  "homepage": "https://github.com/h8ntome/piwebui#readme",
   "author": "h8ntome",
   "keywords": [
     "pi",

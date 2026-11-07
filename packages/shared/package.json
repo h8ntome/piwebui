@@ -25,13 +25,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/h8ntome/piweb.git"
+    "url": "git+https://github.com/h8ntome/piwebui.git"
   },
   "description": "Shared types, schemas, wire frames and vendored colour math for pi-web.",
   "publishConfig": {
     "access": "public"
   },
-  "homepage": "https://github.com/h8ntome/piweb#readme",
+  "homepage": "https://github.com/h8ntome/piwebui#readme",
   "author": "h8ntome",
   "keywords": [
     "pi",

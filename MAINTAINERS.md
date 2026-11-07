@@ -54,7 +54,7 @@ npm versions are immutable and a commit-triggered publish would fail on the next
 One-time bootstrap, per package, because npm cannot configure a trusted publisher for a
 package that does not exist yet: the first `npm publish` of each must be done locally with a
 granular token (`npm publish -w ./packages/shared --provenance` etc.), then on each package's
-npm page enable **Trusted Publishing → GitHub Actions** for repo `h8ntome/piweb`, workflow
+npm page enable **Trusted Publishing → GitHub Actions** for repo `h8ntome/piwebui`, workflow
 file `release.yml`. After that the tag flow needs no token at all. If you would rather skip
 trusted publishing, store a granular publish token as the repo secret `NPM_TOKEN`; the
 workflow already passes it through, and it is ignored when empty.

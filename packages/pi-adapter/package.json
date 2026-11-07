@@ -32,13 +32,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/h8ntome/piweb.git"
+    "url": "git+https://github.com/h8ntome/piwebui.git"
   },
   "description": "pi integration layer for pi-web: version gate, pure read worker, managed host, terminal bridge.",
   "publishConfig": {
     "access": "public"
   },
-  "homepage": "https://github.com/h8ntome/piweb#readme",
+  "homepage": "https://github.com/h8ntome/piwebui#readme",
   "author": "h8ntome",
   "keywords": [
     "pi",
