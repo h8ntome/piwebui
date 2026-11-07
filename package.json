@@ -15,7 +15,7 @@
     "packages/client"
   ],
   "scripts": {
-    "build": "npm run typecheck && npm run build:packages && npm run build -w @pi-web/client",
+    "build": "npm run typecheck && npm run build:packages && npm run build -w @pi-web/client && node scripts/stage-client-dist.mts",
     "build:packages": "npm run build -w @pi-web/shared -w @pi-web/pi-adapter -w @pi-web/server",
     "typecheck": "tsc -p packages/shared/tsconfig.json && tsc -p packages/pi-adapter/tsconfig.json && tsc -p packages/server/tsconfig.json && tsc -p packages/client/tsconfig.json --noEmit",
     "dev:server": "npm run dev -w @pi-web/server",

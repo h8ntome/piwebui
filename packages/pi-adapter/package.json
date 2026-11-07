@@ -23,6 +23,15 @@
     "build": "tsc -p tsconfig.json"
   },
   "files": [
-    "src"
-  ]
+    "src",
+    "dist"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/OWNER/pi-web.git"
+  }
 }

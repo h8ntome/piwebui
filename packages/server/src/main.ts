@@ -42,6 +42,7 @@ function parseFlags(argv: string[]): Record<string, string | boolean> {
 
 function clientDist(): string | null {
   for (const cand of [
+    path.join(HERE, "..", "client-dist"), // packed/installed: npm i -g @pi-web/server
     path.join(HERE, "..", "dist"),
     path.join(HERE, "..", "..", "client", "dist"),
   ]) if (fs.existsSync(path.join(cand, "index.html"))) return cand;

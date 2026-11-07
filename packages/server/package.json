@@ -19,7 +19,17 @@
   },
   "files": [
     "src",
-    "bin"
+    "dist",
+    "bin",
+    "client-dist"
   ],
-  "main": "./dist/main.js"
+  "main": "./dist/main.js",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/OWNER/pi-web.git"
+  }
 }
