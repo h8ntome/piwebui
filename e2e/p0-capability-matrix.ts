@@ -315,6 +315,9 @@ async function sectionC(_mockUrl: string, agentHome: string, workspace: string) 
   const bridgePath = path.join(ROOT, "packages", "pi-adapter", "src", "bridge", "extension.mjs");
   const dialogFix = path.join(ROOT, "e2e", "fixtures", "test-provider.mjs");
   const bridgeDir = tmp("piweb-p0-bridges-");
+  // Name this run's pty uniquely: the generic `ptyrun.py` pattern also matches a leftover from
+  // somebody else's session, and reporting that as *my* leak (or killing it) is wrong.
+  p0Guard.also(bridgeDir);
   const token = crypto.randomBytes(16).toString("hex");
   const cli = path.join(pkg.dir, "dist", "bundle", "cli.js");
   const inner = [
@@ -492,13 +495,13 @@ async function sectionC(_mockUrl: string, agentHome: string, workspace: string) 
     try { if (child?.pid) process.kill(-child.pid, "SIGKILL"); } catch { /* ignore */ }
     try { child?.kill("SIGKILL"); } catch { /* ignore */ }
     // A leaked ptyrun sat at 99% CPU for days on the audit host; fail loudly instead (BUG-041).
-    p0Guard.dispose();
+    if (p0Guard.dispose().leaked.length) process.exitCode = 1;
     fs.rmSync(bridgeDir, { recursive: true, force: true });
   }
 }
 
 /* ================= main ================= */
-const p0Guard = orphanGuard("ptyrun.py -- ");
+const p0Guard = orphanGuard("piweb-p0-bridges-");
 async function main() {
   console.log("pi-web P0 capability matrix");
   console.log(`Pi package: ${resolvePiPackage()?.dir ?? "NOT RESOLVED"} v${resolvePiPackage()?.version}`);

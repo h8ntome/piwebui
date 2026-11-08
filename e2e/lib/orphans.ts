@@ -17,6 +17,8 @@ import type { ChildProcess } from "node:child_process";
 
 export interface OrphanGuard {
   add<T extends ChildProcess>(child: T): T;
+  /** Add a signature later, once the run knows something unique about what it started. */
+  also(signature: string): void;
   dispose(): { leaked: string[] };
 }
 
@@ -30,6 +32,7 @@ export function orphanGuard(signature: string): OrphanGuard {
     try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ }
   };
   const killAll = () => { for (const p of pids) killGroup(p); };
+  const extra: string[] = [];
   const onSignal = (sig: NodeJS.Signals) => { killAll(); process.exit(sig === "SIGINT" ? 130 : 143); };
   process.on("exit", killAll);
   process.on("SIGINT", onSignal);
@@ -39,6 +42,7 @@ export function orphanGuard(signature: string): OrphanGuard {
       if (child.pid) pids.add(child.pid);
       return child;
     },
+    also(signature: string) { extra.push(signature); },
     dispose() {
       killAll();
       let leaked: string[] = [];
@@ -47,7 +51,7 @@ export function orphanGuard(signature: string): OrphanGuard {
         // begins with `--` (a flag the run passed, like `--data-dir /tmp/x`) is parsed by pgrep as
         // its own option and the whole report turns into a usage dump.
         const out = execSync("ps -eo args=", { encoding: "utf8" });
-        const parts = signature.split("|").map((s) => s.trim()).filter(Boolean);
+        const parts = [...signature.split("|"), ...extra].map((s) => s.trim()).filter(Boolean);
         const hit = (line: string) => parts.some((p) => line.includes(p));
         leaked = out.split("\n").filter((l) => l.trim().length > 0 && hit(l) && !l.startsWith("ps "));
       } catch { /* ps missing: nothing to report */ }
