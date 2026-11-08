@@ -4,10 +4,9 @@ All notable changes to pi-web are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project aims for
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-This file starts here: pi-web has been developed in a single working branch so far, and **`0.1.0` (the
-version currently declared in every workspace manifest) has not been tagged or published yet**. No
-historical releases are back-filled below — the first real release cut will replace the `Unreleased`
-section with a dated entry.
+This file starts here: pi-web was developed in a single working branch, and **`0.1.0` was published to
+npm by hand on 2026-11-07** (see `MAINTAINERS.md` for why that artifact is incomplete). No historical
+releases are back-filled below — each release cut replaces the `Unreleased` section with a dated entry.
 
 ## [Unreleased]
 
@@ -98,6 +97,21 @@ section with a dated entry.
 
 ### Fixed
 
+- **`npm install -g @piwebui/pi-web` installed no `pi-web` command.** The install finished (176
+  packages, no error) and then `pi-web` was `command not found`, because the artifact on the `latest`
+  dist-tag — `0.1.0` — was published from a manifest whose `bin` map had been renamed to `piweb`
+  only, while every document tells people to type `pi-web`. npm versions are immutable, so `0.1.0`
+  cannot be repaired: the manifests are bumped to `0.1.1` and `latest` moves by cutting `v0.1.1`
+  (`npm i -g @piwebui/pi-web@next` already gives the working command). Two gates keep the two sides
+  of the promise together from here: `npm run check:cli` fails a build when the shipped `bin` map and
+  the commands used in the docs disagree (`scripts/cli-names.mts` is the one list), and
+  `npm run verify:published` installs what the *registry* serves into a scratch global prefix and
+  runs `pi-web --version` / `piweb --version`, so a release that would leave users without the
+  documented command fails CI instead of shipping. `release.yml` now runs both.
+- **The README blamed `PATH` for that symptom.** The "command not found" note only described the
+  `PATH` cause, which sends people into their shell config for a version problem; it now has you ask
+  npm what the installed artifact declares (`npm view @piwebui/pi-web bin`, `piweb --version`) first,
+  and records the `EEXIST` collision with the unrelated unscoped `pi-web` package.
 - **The hero folder selector was floating in the wrong place.** `--dsh-composer-hero-padding` was
   referenced in `.pw-hero__stack` / `.pw-hero__body` but never defined, which made the whole `calc()`
   invalid and dropped its `max-width`: the workspace chip stayed pinned to the far left of the column

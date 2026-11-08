@@ -29,6 +29,8 @@ jobs:
           cache: npm
       - name: Install (clean, from lockfile)
         run: npm ci
+      - name: CLI names gate (shipped bin map vs. documented commands)
+        run: npm run check:cli
       - name: Typecheck all workspaces
         run: npm run typecheck
       - name: Unit tests

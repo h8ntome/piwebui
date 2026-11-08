@@ -33,14 +33,31 @@ answered produces a worse repository than leaving them open.
 ## Release process (automated)
 
 npm packages live under the `piwebui` org: `@piwebui/shared`, `@piwebui/pi-adapter` and
-`@piwebui/pi-web` (the server + CLI; `bin` is `piweb`, deliberately not `pi-web`, which is
-already used by an unrelated package on npm). The web client is `private: true` and is not
-published — it is built into `@piwebui/pi-web` as `client-dist`.
+`@piwebui/pi-web` (the server + CLI; `bin` is `pi-web` with `piweb` kept as a compatibility alias —
+see `scripts/cli-names.mts`, which is the one list to edit if that ever changes). The web client is
+`private: true` and is not published — it is built into `@piwebui/pi-web` as `client-dist`.
 
 Every commit to `main` and every version tag publishes — `.github/workflows/release.yml` handles
-both, and both run the same gate first (`npm run build` then `npm run package:smoke`: pack → clean
-install → boot → authenticated probe), so a commit that does not produce a working artifact never
-reaches npm.
+both, and both run the same gate first (`npm run check:cli`, `npm run build` then
+`npm run package:smoke`: pack → clean install → boot → authenticated probe), so a commit that does
+not produce a working artifact never reaches npm.
+
+### Command names are a checked contract
+
+`scripts/cli-names.mts` declares the names the CLI must answer to (`pi-web`, plus the `piweb`
+compatibility alias). `npm run check:cli` — the first step of `npm run build`, and therefore of every
+publish — fails when:
+
+- the server manifest's `bin` map is missing a declared name, ships an undeclared one, or points a
+  name at anything other than `bin/pi-web.mjs`;
+- a declared `bin` target is absent or excluded by the `files` allowlist (npm would install a
+  dangling symlink);
+- a fenced code block in `README.md`, `MAINTAINERS.md`, `CHANGELOG.md` or `docs/**` runs a
+  command-like token that the package does not ship — docs typos like `pi_web` included.
+
+Add a name in three places or not at all: `scripts/cli-names.mts`, `bin` in
+`packages/server/package.json`, and the README CLI table. That rule exists because the `latest`
+artifact on npm shipped without the documented command and nothing compared the two.
 
 | push | version | dist-tag | install |
 | --- | --- | --- | --- |
@@ -50,15 +67,37 @@ reaches npm.
 A stable release is still one command:
 
 ```bash
-# 1. bump all three manifests to the same version, commit
+# 1. bump all three manifests to the same version (and the lockfile), then commit
+for p in shared pi-adapter server; do node -p "require('./packages/$p/package.json').version"; done
+npm run check:cli
 # 2. tag it and push the tag
 git tag v0.1.1 && git push origin v0.1.1
 ```
 
-Release state worth remembering: the `0.1.0` on npm predates the `pi-web` command name (it ships only
-the `piweb` alias) — `docs/research/dsh-web-launch.md`. Cutting `v0.1.1` from bumped manifests is what
-puts a plain `npm i -g @piwebui/pi-web` onto a CLI that answers to `pi-web`; until then
-`npm i -g @piwebui/pi-web@next` from `main` is the artifact that has it.
+Then prove the release from the registry side, not the tree side — this is the check that a
+`npm install -g` really lands on a command that exists:
+
+```bash
+npm run verify:published -- --tag latest --expect-version 0.1.1
+```
+
+It resolves the dist-tag against the live registry, packs the published tarball, installs it into a
+scratch global prefix and runs `pi-web --version` / `piweb --version` from an unrelated directory.
+The release workflow runs the same command as its last step, so a publish that does not produce a
+working `pi-web` fails the run instead of sitting on `latest`.
+
+### Release state worth remembering
+
+`0.1.0` on npm is broken for the documented workflow and cannot be repaired: it was published before
+`pi-web` was restored as the command name, so its `bin` map ships only `piweb`, and npm versions are
+immutable. Every `npm install -g @piwebui/pi-web` against that artifact ends with
+`zsh: command not found: pi-web`. Cutting `v0.1.1` from bumped manifests is what moves `latest` onto
+an artifact that answers to `pi-web`; until that tag is pushed, `npm i -g @piwebui/pi-web@next` (the
+canary built from `main`) is the artifact that has it.
+
+`pi-web` as a *command name* is also used by the unrelated unscoped `pi-web` package on npm. That is
+why `piweb` stays shipped: it is the escape hatch when the other package already owns the symlink in
+a global prefix (npm then fails the install with `EEXIST`).
 
 Canary versions are stamped inside the job by `scripts/set-canary-version.mts` and never committed,
 so main's manifests keep the last released version and a canary can never collide with a future

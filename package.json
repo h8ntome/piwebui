@@ -1,6 +1,6 @@
 {
   "name": "pi-web-workspace",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Browser view and control surface over Pi sessions (independent project; Pi executes, pi-web renders and relays)",
   "type": "module",
@@ -15,7 +15,9 @@
     "packages/client"
   ],
   "scripts": {
-    "build": "npm run typecheck && npm run build:packages && npm run build -w @piwebui/client && node scripts/stage-client-dist.mts",
+    "build": "npm run check:cli && npm run typecheck && npm run build:packages && npm run build -w @piwebui/client && node scripts/stage-client-dist.mts",
+    "check:cli": "tsx scripts/check-cli-names.mts",
+    "verify:published": "tsx scripts/verify-published.mts",
     "build:packages": "npm run build -w @piwebui/shared -w @piwebui/pi-adapter -w @piwebui/pi-web",
     "typecheck": "tsc -p packages/shared/tsconfig.json && tsc -p packages/pi-adapter/tsconfig.json && tsc -p packages/server/tsconfig.json && tsc -p packages/client/tsconfig.json --noEmit",
     "dev:server": "npm run dev -w @piwebui/pi-web",

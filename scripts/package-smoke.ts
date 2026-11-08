@@ -11,6 +11,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { CLI_NAMES, CLI_PRIMARY } from "./cli-names.mts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(HERE, "..");
@@ -47,10 +48,21 @@ ok("clean install of packed artifacts");
 const dataDir = path.join(tmp, "data");
 const PORT = 4096 + Math.floor(Math.random() * 4096);
 const binDir = path.join(install, "node_modules/.bin");
-const bin = path.join(binDir, "pi-web");
-if (!fs.existsSync(bin)) { fail("packed bin pi-web missing"); process.exit(1); }
-if (!fs.existsSync(path.join(binDir, "piweb"))) fail("packed compatibility bin piweb missing");
-else ok("packed bins: pi-web (+ piweb alias)");
+// The install is the truth about `bin`: npm only creates a shim for each declared name,
+// so a manifest that forgot `pi-web` fails here instead of shipping a broken command.
+const packedPkg = JSON.parse(
+  fs.readFileSync(path.join(install, "node_modules", "@piwebui", "pi-web", "package.json"), "utf8"),
+) as { bin?: Record<string, string> };
+const declaredBin = Object.keys(packedPkg.bin ?? {});
+for (const name of CLI_NAMES) {
+  if (!declaredBin.includes(name)) fail(`packed manifest declares no \`${name}\` in \`bin\` (${JSON.stringify(packedPkg.bin)})`);
+  if (!fs.existsSync(path.join(binDir, name))) fail(`packed install produced no \`${name}\` command in node_modules/.bin`);
+}
+if (declaredBin.length && declaredBin.every((n) => CLI_NAMES.includes(n))) {
+  ok(`packed bins: ${CLI_NAMES.map((n) => `\`${n}\``).join(", ")}`);
+}
+const bin = path.join(binDir, CLI_PRIMARY);
+if (!fs.existsSync(bin)) { fail(`packed bin ${CLI_PRIMARY} missing`); process.exit(1); }
 
 /** Run the packed CLI from a directory unrelated to the install (launch is cwd-independent). */
 const runBin = (args: string[], extra: Record<string, string> = {}) =>
@@ -126,13 +138,18 @@ try { zsrv.kill("SIGKILL"); srv.kill("SIGKILL"); } catch { /* gone */ }
 // from an unrelated cwd, exactly as the README tells people to.
 const prefix = path.join(tmp, "global-prefix");
 const gins = spawnSync("npm", ["install", "-g", "--no-audit", "--no-fund", "--prefix", prefix, ...packs], { cwd: os.tmpdir(), encoding: "utf8" });
-const gbin = path.join(prefix, "bin", "pi-web");
+const gbin = path.join(prefix, "bin", CLI_PRIMARY);
 if (gins.status !== 0) fail(`global install failed: ${gins.stderr?.slice(0, 300)}`);
-else if (!fs.existsSync(gbin)) fail("global install produced no bin/pi-web");
 else {
-  const gv = spawnSync(gbin, ["--version"], { cwd: os.tmpdir(), encoding: "utf8", timeout: 60_000 });
-  if (gv.status === 0 && /^pi-web \d/m.test(gv.stdout)) ok(`npm i -g -> \`pi-web --version\` = ${gv.stdout.trim()}`);
-  else fail(`global pi-web did not run (status ${gv.status}): ${(gv.stderr || gv.stdout).slice(0, 300)}`);
+  const missing = CLI_NAMES.filter((n) => !fs.existsSync(path.join(prefix, "bin", n)));
+  if (missing.length) fail(`global install put no ${missing.map((n) => `\`${n}\``).join(" or ")} in ${prefix}/bin — \`npm i -g\` then reports "command not found" for the documented command`);
+  else {
+    const gv = spawnSync(gbin, ["--version"], { cwd: os.tmpdir(), encoding: "utf8", timeout: 60_000 });
+    if (gv.status === 0 && /^pi-web \d/m.test(gv.stdout)) ok(`npm i -g -> \`${CLI_PRIMARY} --version\` = ${gv.stdout.trim()}`);
+    else fail(`global ${CLI_PRIMARY} did not run (status ${gv.status}): ${(gv.stderr || gv.stdout).slice(0, 300)}`);
+  }
+}
+if (fs.existsSync(gbin)) {
   const gdata = path.join(tmp, "gdata");
   const gport = 4096 + Math.floor(Math.random() * 4096);
   const gsrv = spawn(gbin, ["--port", String(gport), "--data-dir", gdata, "--no-open"], { cwd: os.tmpdir(), stdio: ["ignore", "pipe", "pipe"], detached: true });

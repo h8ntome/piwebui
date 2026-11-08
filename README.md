@@ -61,13 +61,34 @@ npx pi-web                     # or: node packages/server/bin/pi-web.mjs
 <details>
 <summary><code>pi-web: command not found</code> after a global install</summary>
 
-Your npm global bin directory is not on `PATH`. Ask npm where it put the command and add that
-directory to your shell's `PATH`:
+Two unrelated causes; the first is the one people hit, and it is version-specific rather than a
+PATH problem. Ask npm what your installed artifact actually declares:
 
 ```bash
-npm prefix -g                    # e.g. /home/you/.local/lib/node_modules/node
-export PATH="$(npm prefix -g)/bin:$PATH"
+npm ls -g @piwebui/pi-web        # the version you have
+npm view @piwebui/pi-web bin     # the commands that version ships on PATH
+piweb --version                  # the older name; works on every version
 ```
+
+- **The installed version predates the command name.** `0.1.0` shipped only the `piweb` alias, so
+  the install succeeds and `pi-web` is still missing — check with `npm view @piwebui/pi-web bin`
+  before hunting through your shell config. Update and you get both names:
+
+  ```bash
+  npm install -g @piwebui/pi-web@latest
+  ```
+
+- **Your npm global bin directory is not on `PATH`.** Ask npm where it put the command and add that
+  directory to your shell's `PATH`:
+
+  ```bash
+  npm prefix -g                    # e.g. /home/you/.local/lib/node_modules/node
+  export PATH="$(npm prefix -g)/bin:$PATH"
+  ```
+
+One more collision to know about: the unrelated package named `pi-web` on npm also installs a
+`pi-web` command, so if you installed that one globally first, `npm i -g @piwebui/pi-web` can fail
+with `EEXIST` on the symlink. Uninstall the other package, or use this package's `piweb` command.
 
 The launcher itself never needs a build step: `bin/pi-web.mjs` runs the compiled `dist/main.js`
 shipped in the tarball, and falls back to the TypeScript sources through `tsx` in a checkout.
@@ -124,6 +145,8 @@ pi-web help | --version                  # usage / version
 ```
 
 `piweb` is kept as a compatibility alias for every command, so older notes and scripts keep working.
+It is also the fallback when something else already owns `pi-web` in your npm global prefix (see
+the install note above).
 
 ## Security
 

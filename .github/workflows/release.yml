@@ -153,6 +153,7 @@ jobs:
       - name: Build and package gate
         timeout-minutes: 8
         run: |
+          npm run check:cli
           npm run build
           npm run package:smoke
 
@@ -182,6 +183,18 @@ jobs:
             cat /tmp/pub.log
             echo "::endgroup::"
           done
+
+      - name: Verify what a new install actually gets
+        # The packaging gate proves the tree; only the registry proves the release. This is
+        # the step that catches "`latest` still points at an artifact whose `bin` map predates
+        # the command name", i.e. `npm i -g @piwebui/pi-web` succeeding and then reporting
+        # `pi-web: command not found`. It installs the published tarball into a scratch
+        # global prefix and runs `pi-web --version` from an unrelated cwd.
+        timeout-minutes: 6
+        run: |
+          set -euo pipefail
+          npm run verify:published -- --version "${{ steps.kind.outputs.version }}" --settle 120
+          npm run verify:published -- --tag "${{ steps.kind.outputs.tag }}" --expect-version "${{ steps.kind.outputs.version }}"
 
       - name: Show what landed
         run: |
