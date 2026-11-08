@@ -167,6 +167,50 @@ releases are back-filled below — each release cut replaces the `Unreleased` se
 
 ### Fixed
 
+- **A fresh `npm i -g @piwebui/pi-web@latest` could not list chats, open a project, or start a browser
+  chat** — the three things the README tells you to do first. The published server resolved the pure
+  read worker and the managed host with sibling-path arithmetic, so both files were missing from the
+  only layout users actually install into; the worker's load error exited silently, and the boot error
+  arrived under a timestamp the UI renders as `…` with no error anywhere. Scripts now resolve through
+  Node module resolution with layout fallbacks, a dead worker fails fast with its exit code and
+  stderr tail in the server log, and a failed boot says what failed in the sidebar, the right panel
+  and the terminal. `npm pack` also shipped no client at all (`404` at `/`); the packed tree now
+  builds and stages `client-dist`, and `npm run package:smoke` packs the tarball, installs it into a
+  throwaway prefix and refuses to pass unless the real thing lists chats, opens files and boots a
+  managed host.
+- A bridged terminal leaked one live preview per streamed chunk — duplicate assistant rows, each
+  stuck on "working", replayed on every reload, growing unbounded — because previews were keyed on
+  message-object identity and pi hands a fresh object per token. Both bridge implementations are
+  fixed, with regression tests that reproduce the exact shape.
+- `/raw` truncated to the page cap and answered `200`, so a "Download log" could silently be a
+  partial file; a partial answer now says `Content-Range`. `/files?path=` accepted absolute paths
+  outside the workspace (403 for `/etc`, 500 for nonsense) and answered a machine-root listing with
+  a bare `[]`; missing paths now `404` and say why, and an orphaned or vanished session file reports
+  the path instead of a blank panel or the neighbour's history.
+- Model and thinking were blank for every session until its first run, cold file reads ignored a
+  model/thinking that was already set, and an invalid bearer token silently downgraded the request to
+  an anonymous session instead of answering `401`.
+- Directory picker: the path you picked was not shown in the breadcrumb and a failed path vanished
+  without a trace. Unreachable row actions (Rename, Copy path, Session options, Remove, Download log)
+  are focusable. A fresh session is titled from its first prompt immediately.
+- Added `DELETE /api/v1/sessions/:key` with the hidden-chat list and `pi-web hidden` / `unhide`, so a
+  mistaken chat can be removed; abandoned never-run managed sessions release their host instead of
+  holding capacity until the next restart.
+- Honesty in the surfaces clients read: unmapped runtime events were dropped into a frame name no
+  client subscribes to and are now `notice` frames the UI shows; `mode` asks the filesystem before
+  declaring a session `no file`; `entryCount` no longer means the page size; `/meta` publishes the
+  rate limit it actually enforces; the idempotency error states the rule actually enforced; the busy
+  answer names the holding controller and its lease; stale runtime state no longer renders as a
+  spinner, and a live-but-unrun session says "Ready" instead of "Unknown".
+- Test suites that could not be trusted: `npm run smoke` exited `1` on every run (it asserted a field
+  the endpoint never returns), its "flaky" parallel-prompt row was the harness trying to acquire a
+  session it already controlled, and `npm run p0:verify` rewrote tracked files on every run. The
+  harnesses now kill every process group they start and fail the run on a survivor; bridge coverage
+  gained the preview-leak row, a kill during a dialog, and a model override on the bridge path.
+- Storage and CLI hygiene: the store and data dir are no longer group/world-readable, `pi-web doctor
+  --json` answers JSON on its failure paths, the CLI no longer prints the bridge token or positions
+  its `serve` flags wrongly, and Pi's own `settings.json` entry for the bridge is replaced on
+  reinstall instead of duplicated.
 - **`latest` was not one release.** All four publishable packages answered `0.1.0` for `latest`, but
   three of them were published on 2026-11-07 and `@piwebui/pi-web-bridge@0.1.0` on 2026-11-08 — the
   one-time hand-publish that had to happen to register a trusted publisher reused a version number a

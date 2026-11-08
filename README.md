@@ -273,6 +273,11 @@ the install note above).
   host-only, and `Secure` whenever the request arrives over TLS.
 - Responses carry a strict CSP, `nosniff`, `X-Frame-Options: DENY` and `referrer-policy: no-referrer`;
   markdown is sanitized; payloads and page sizes are bounded with explicit errors.
+- Commands are rate-limited per session and per principal. The number is not decorative: it is
+  `PI_WEB_RATE_LIMIT_PER_MINUTE`, default 300, published live as `meta.limits.rateLimitPerMinute`
+  so a client can back off from what the server actually enforces instead of a remembered figure.
+  An anonymous cookie session and a bearer token are *distinct* principals, so a scripted token does
+  not share a bucket with your browser.
 - Logs are structured and content-free: prompts, tool output and secrets are not logged.
 
 A control grant is equivalent to typing in that project's terminal — pi-web deliberately does not
@@ -297,10 +302,16 @@ npm ci
 npm run build          # typecheck all packages, compile them, build and stage the client
 npm run test:unit      # unit suite
 npm run smoke          # full-stack HTTP/SSE smoke against a real pi
-npm run p0:verify      # capability matrix
+npm run smoke:bridge   # a real terminal pi bridged to the browser, end to end
+npm run p0:verify      # capability matrix, compared against the committed files (read-only)
+npm run p0:matrix      # regenerate e2e/matrix/*.md deliberately, then commit them
 npm run dev:server     # tsx watch on 4319
 npm run dev:client     # vite on 5199, proxying /api
 ```
+
+`p0:verify` never rewrites tracked files: it re-runs the matrix into a temporary directory and
+reports PASS/FAIL against what is committed, so a passing run leaves `git status` clean. When a
+change legitimately alters capability coverage, run `p0:matrix` and commit the diff.
 
 Full setup, repository map, conventions and troubleshooting: [CONTRIBUTING.md](CONTRIBUTING.md).
 

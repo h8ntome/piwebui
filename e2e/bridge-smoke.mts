@@ -279,9 +279,16 @@ async function main(): Promise<number> {
   const previewList = lastRuntime?.previews ?? [];
   const openPreviews = previewList.filter((p) => !p.done);
   const dupIds = previewList.length !== new Set(previewList.map((p) => p.liveMessageId)).size ? previewList.length : 0;
+  // Count the ids the stream actually produced for this one turn: a leak shows up as one new
+  // liveMessageId per chunk, so a single answer arrives as dozens of rows (the old BUG-004).
+  const streamedIds = new Set(sse.events.filter((e) => e.name === "preview").map((e) => (e.payload as { liveMessageId?: string }).liveMessageId));
+  const assistantIds = new Set(sse.events
+    .filter((e) => e.name === "preview")
+    .filter((e) => (e.payload as { role?: string }).role === "assistant")
+    .map((e) => (e.payload as { liveMessageId?: string }).liveMessageId));
   check("R-3c", "no unfinished or duplicate previews survive a terminal turn",
-    previewList.length <= 8 && openPreviews.length === 0 && !dupIds,
-    `phase=${lastRuntime?.phase} previews=${previewList.length} open=${openPreviews.length} ids=${new Set(previewList.map((p) => p.liveMessageId)).size}`);
+    previewList.length <= 8 && openPreviews.length === 0 && !dupIds && assistantIds.size <= 3,
+    `phase=${lastRuntime?.phase} previews=${previewList.length} open=${openPreviews.length} ids=${new Set(previewList.map((p) => p.liveMessageId)).size} streamed=${streamedIds.size} assistantIds=${assistantIds.size}`);
 
   // ---------- 5. the browser drives the terminal ----------
   const acquire = async () => {

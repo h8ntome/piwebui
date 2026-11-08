@@ -7,6 +7,8 @@
  * makes the *next* run's failures meaningless.
  *
  * Usage: `const guard = orphanGuard("pi-web-e2e"); guard.add(child); ... guard.dispose();`
+ * The signature is a `|`-separated list of literal substrings that identify this harness's own
+ * processes (a temp path or a flag only it passes) - it is matched as text, never as a regex.
  * `dispose()` kills every group, then reports anything of ours still alive so the suite fails
  * loudly instead of leaving it for the next person.
  */
@@ -41,9 +43,14 @@ export function orphanGuard(signature: string): OrphanGuard {
       killAll();
       let leaked: string[] = [];
       try {
-        const out = execSync(`pgrep -fa ${JSON.stringify(signature)} || true`, { encoding: "utf8" });
-        leaked = out.split("\n").filter((l) => l.trim().length > 0 && !l.includes("pgrep"));
-      } catch { /* pgrep missing: nothing to report */ }
+        // `ps` + a literal substring match rather than `pgrep -fa "$signature"`: a signature that
+        // begins with `--` (a flag the run passed, like `--data-dir /tmp/x`) is parsed by pgrep as
+        // its own option and the whole report turns into a usage dump.
+        const out = execSync("ps -eo args=", { encoding: "utf8" });
+        const parts = signature.split("|").map((s) => s.trim()).filter(Boolean);
+        const hit = (line: string) => parts.some((p) => line.includes(p));
+        leaked = out.split("\n").filter((l) => l.trim().length > 0 && hit(l) && !l.startsWith("ps "));
+      } catch { /* ps missing: nothing to report */ }
       if (leaked.length) {
         console.error(`orphan guard: ${leaked.length} process(es) matching "${signature}" survived this run:\n${leaked.join("\n")}`);
       }
