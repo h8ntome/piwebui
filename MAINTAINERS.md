@@ -160,12 +160,12 @@ picks it up automatically and drops `--provenance` in that mode, and it can also
 above from CI. Note npm is removing direct publish from 2FA-bypass tokens in January 2027, so
 this is a bridge, not a destination.
 
-Bootstrap state of record: `@piwebui/shared`, `@piwebui/pi-adapter` and `@piwebui/pi-web` were
-bootstrapped at `0.1.0` on 2026-11-07 and have GitHub Actions as a trusted publisher. A fourth
-package is never free: `@piwebui/pi-web-bridge` was bootstrapped at `0.1.0` on 2026-11-08 (hand-
-published with a granular token, so it carries no provenance) and its trusted publisher still has
-to be added — until then a CI publish of it fails with the masked 404-on-PUT, and the three older
-packages still publish.
+Bootstrap state of record: all four packages are bootstrapped and have GitHub Actions as a trusted
+publisher, so every commit to `main` now reaches npm without a human in the loop. The bootstrap is
+never free: a package cannot get a trusted publisher before it exists, so each one had to be
+hand-published once first — `@piwebui/shared`, `@piwebui/pi-adapter` and `@piwebui/pi-web` at
+`0.1.0` on 2026-11-07, `@piwebui/pi-web-bridge` at `0.1.0` on 2026-11-08 with a granular token (so
+that one artifact carries no provenance; every version since does).
 
 That last sentence is a design decision, not an accident. npm hides a refused publisher behind
 `404 Not Found - PUT`, and the only package that hits it in practice is one whose publisher is not
@@ -175,6 +175,10 @@ with the list and the command. One un-bootstrapped package is loud, but it canno
 for the rest of the repository. Any other publish refusal (immutable version, a token secret that
 cannot write the package) still aborts immediately, and `verify-published --all` is told which
 packages were skipped so it does not report them as release failures.
+
+Which is also why a fix lands as a new commit rather than as `gh run rerun`: the canary version
+carries the run number and the SHA, so rerunning a run that already published tries to republish
+bytes npm refuses (`cannot publish over the previously published versions`) and aborts by design.
 
 Internal dependency ranges are caret versions (`^0.1.0`), not the `workspace:*` protocol:
 `npm pack` does not rewrite `workspace:*` in this layout, so a published tarball carrying it
