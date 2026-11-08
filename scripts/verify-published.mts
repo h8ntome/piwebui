@@ -21,8 +21,9 @@
  * and pointing `latest` at it are two things that can fail independently.
  *
  * `--settle <seconds>` polls for up to that long before giving up: npm's read replica
- * lags the write by up to a minute after a publish, so a verify run fired straight after
- * `npm publish` must not treat the first `404` as the truth.
+ * lags the write by minutes after a publish, so a verify run fired straight after
+ * `npm publish` must not treat the first `404` — or a dist-tag that still resolves to the
+ * previous version — as the truth.
  *
  * `check-cli-names.mts` proves the repository is self-consistent; it cannot see the
  * artifact already on the registry. This script closes that gap, because the reported
@@ -77,40 +78,49 @@ process.on("exit", () => fs.rmSync(tmp, { recursive: true, force: true }));
 
 console.log(`verifying ${pkgName} ${label} from ${process.env.npm_config_registry || "https://registry.npmjs.org"}`);
 
-// 1. what does the registry say this tag points at? (retry while the read replica catches up)
-let view = npm(["view", spec, "--json"]);
-for (let waited = 0; view.status !== 0 && waited < settleMs; ) {
-  const err0 = `${view.stdout}${view.stderr}`;
-  if (!/E404|not found/i.test(err0)) break;
-  const step = 10_000;
-  console.log(`   not visible yet (npm read replica lags the write); retrying in ${step / 1000}s`);
+// 1. what does the registry say this tag points at? Retry while the read replica catches up.
+// Two transients live here, and only one of them looks like an error: a version that was
+// published seconds ago is routinely invisible for minutes, and a dist-tag that has not
+// propagated yet answers with the *previous* version rather than failing. Both must be
+// waited out, or a perfectly good release is reported as a missing one.
+let manifest: { version?: string; bin?: Record<string, string> | string } = {};
+let version = "";
+const view = (args: string[]) => npm(args);
+let out = view(["view", spec, "--json"]);
+for (let waited = 0; ; ) {
+  const err0 = `${out.stdout}${out.stderr}`;
+  let why = "";
+  if (out.status !== 0) {
+    if (!/E404|not found/i.test(err0)) fail(`npm view failed (${out.status}): ${err0.trim().slice(0, 400)}`);
+    why = `the registry has no ${spec} yet (404)`;
+  } else {
+    try {
+      manifest = JSON.parse(out.stdout) as typeof manifest;
+    } catch {
+      fail(`could not parse \`npm view ${spec} --json\`: ${out.stdout.trim().slice(0, 200)}`);
+    }
+    version = manifest.version ?? "";
+    if (!version) fail(`the published manifest for ${spec} has no version: ${out.stdout.trim().slice(0, 200)}`);
+    if (expectVersion && version !== expectVersion) why = `${label} still resolves to ${version}, not the ${expectVersion} that was just published`;
+  }
+  if (!why) break;
+  if (waited >= settleMs) {
+    if (why.startsWith("the registry has no")) {
+      fail(`${why} — nothing is published under ${label}, so \`npm i -g\` has nothing to install. ${err0.trim().slice(0, 300)}`);
+    }
+    fail(`${why} — after ${Math.round(settleMs / 1000)}s of retrying the tag has not moved (or it moved to an older version).`);
+  }
+  const step = 15_000;
+  console.log(`   ${why}; npm read replica lags the write, retrying in ${step / 1000}s`);
   await sleep(step);
   waited += step;
-  view = npm(["view", spec, "--json"]);
+  out = view(["view", spec, "--json"]);
 }
-if (view.status !== 0) {
-  const err = `${view.stdout}${view.stderr}`;
-  if (/E404|not found/i.test(err)) {
-    fail(`the registry has no ${spec} (404) — nothing is published under ${label}, so \`npm i -g\` has nothing to install. ${err.trim().slice(0, 300)}`);
-  }
-  fail(`npm view failed (${view.status}): ${err.trim().slice(0, 400)}`);
-}
-let manifest: { version?: string; bin?: Record<string, string> | string } = {};
-try {
-  manifest = JSON.parse(view.stdout) as typeof manifest;
-} catch {
-  fail(`could not parse \`npm view ${spec} --json\`: ${view.stdout.trim().slice(0, 200)}`);
-}
-const version = manifest.version ?? "";
 // `bin` may be a bare string (`"bin": "./cli.js"`), in which case npm names the command
 // after the package, which is never what our docs promise.
 const rawBin = manifest.bin;
 const binMap: Record<string, string> =
   typeof rawBin === "string" ? { [pkgName]: rawBin } : (rawBin ?? {});
-if (!version) fail(`the published manifest for ${spec} has no version: ${view.stdout.trim().slice(0, 200)}`);
-if (expectVersion && version !== expectVersion) {
-  fail(`${label} resolves to ${version}, not the ${expectVersion} that was just published — the publish did not move the tag (or it moved to an older version).`);
-}
 ok(`${spec} -> ${version}${expectVersion ? ` (as expected)` : ""}`);
 
 // 2. does the published manifest put every documented command on PATH?

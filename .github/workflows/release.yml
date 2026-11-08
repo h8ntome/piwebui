@@ -219,12 +219,16 @@ jobs:
         # the command name", i.e. `npm i -g @piwebui/pi-web` succeeding and then reporting
         # `pi-web: command not found`. It installs the published tarball into a scratch
         # global prefix and runs `pi-web --version` from an unrelated cwd.
-        timeout-minutes: 6
+        timeout-minutes: 12
         run: |
           set -euo pipefail
+          # --settle outlasts npm's read replica: a version published seconds ago is regularly
+          # invisible (404) for minutes, and a dist-tag that has not propagated yet reports the
+          # previous version instead of erroring. Both are transient and both used to fail a
+          # release that had actually published (run 42476585258).
           blocked="${{ steps.publish.outputs.blocked }}"
-          npm run verify:published -- --version "${{ steps.kind.outputs.version }}" --settle 120 --all --allow-missing "$blocked"
-          npm run verify:published -- --tag "${{ steps.kind.outputs.tag }}" --expect-version "${{ steps.kind.outputs.version }}" --all --allow-missing "$blocked"
+          npm run verify:published -- --version "${{ steps.kind.outputs.version }}" --settle 300 --all --allow-missing "$blocked"
+          npm run verify:published -- --tag "${{ steps.kind.outputs.tag }}" --expect-version "${{ steps.kind.outputs.version }}" --settle 300 --all --allow-missing "$blocked"
 
       - name: Show what landed
         run: |
