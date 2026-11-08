@@ -46,5 +46,11 @@ jobs:
         # The definition-of-done for the bridge: `pi install` the package, start a stock pi with
         # no bridge environment variables, and prove it shows up live, streams, and takes browser
         # prompts. Advisory for now, like the rest of this workflow.
+        #
+        # `if: '!cancelled()'` is load-bearing: the step above is expected to fail (S13/S17/S18/S20
+        # are known-failing), and a failed step silently skips every later step under the default
+        # `success()` condition — so without this the bridge smoke reported nothing at all while
+        # looking like it was part of the run.
+        if: ${{ !cancelled() }}
         continue-on-error: true
         run: npm run smoke:bridge
