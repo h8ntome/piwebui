@@ -34,13 +34,27 @@
  * and therefore installed only `piweb`. Only the registry can answer "what will a new
  * install get?".
  *
+ * The same gap has a second, deeper shape, and `--all` checks it: a *set* of packages that
+ * share one version number can still be different releases. `@piwebui/pi-web@0.1.0` (2026-11-07,
+ * before the terminal bridge existed) and `@piwebui/pi-web-bridge@0.1.0` (2026-11-08, the new
+ * dial-mode bridge, hand-published during the trusted-publisher bootstrap) are both `latest`
+ * right now, so the README's two install commands produce a server that has no bridge listener
+ * and a bridge that dials a socket nothing publishes. Hence the release-set check below: every
+ * publishable package's dist-tag must name the same version *and* that version must have been
+ * published inside one window.
+ *
  * Steps, all against the live registry and in throwaway directories:
  *   1. resolve the dist-tag to a concrete version and read its published manifest;
- *   2. require every documented command name in that manifest's `bin` map;
- *   3. `npm pack` the tarball and confirm each declared bin target ships inside it
+ *   2. with `--all`, release-set integrity: every publishable package's dist-tag names this one
+ *      version, and that version was published inside one window (a mixed set is the bug);
+ *   3. require every documented command name in the CLI manifest's `bin` map;
+ *   4. `npm pack` the tarball and confirm each declared bin target ships inside it
  *      (a manifest can name a file the pack never included);
- *   4. `npm install -g` into a scratch prefix and run `<cmd> --version` from an
- *      unrelated cwd, exactly as the README instructs.
+ *   5. `npm install -g` into a scratch prefix and run `<cmd> --version` from an unrelated cwd,
+ *      exactly as the README instructs;
+ *   6. when the verified version is the one this checkout documents, require every documented
+ *      `pi-web <subcommand>` to exist in the *published* `dist/main.js`;
+ *   7. with `--all`, the per-package half for every other publishable package.
  *
  * Exits non-zero with the reason, so CI can gate a release on it.
  */
@@ -48,7 +62,14 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { CLI_NAMES, SERVER_PKG_NAME } from "./cli-names.mts";
+import {
+  CLI_NAMES,
+  CLI_PRIMARY,
+  SERVER_PKG_NAME,
+  docFiles,
+  documentedSubcommands,
+  readServerManifest,
+} from "./cli-names.mts";
 import { publishablePackages } from "./publish-list.mts";
 
 const argv = process.argv.slice(2);
@@ -57,6 +78,8 @@ const flag = (name: string, fallback = ""): string => {
   return i >= 0 && argv[i + 1] && !argv[i + 1].startsWith("--") ? argv[i + 1] : fallback;
 };
 const all = argv.includes("--all");
+/** How far apart the publishes of one release set may be, in hours. */
+const SET_WINDOW_HOURS = Number(flag("set-window-hours", "6") || 6);
 
 const pkgName = process.env.PIWEB_VERIFY_PKG || SERVER_PKG_NAME;
 const spec = flag("version") ? `${pkgName}@${flag("version")}` : `${pkgName}@${flag("tag", "latest")}`;
@@ -99,6 +122,84 @@ const waitForVersion = async (target: string, why: string) => {
   }
   return r.status === 0;
 };
+
+/** `npm view` that keeps retrying while the read replica could still come good. */
+const viewSettled = async (args: string[]) => {
+  let r = npm(args);
+  while (r.status !== 0 && Date.now() < lagDeadline) {
+    const step = 15_000;
+    console.log(`   ${args[1]} not visible yet; retrying in ${step / 1000}s`);
+    await sleep(step);
+    r = npm(args);
+  }
+  return r;
+};
+
+const allowMissing = new Set(flag("allow-missing").split(/\s+/).filter(Boolean));
+
+/**
+ * Release-set integrity: one version number is not one release.
+ *
+ * These four packages are released together and their manifests are held at the same version by
+ * the release workflow, so a user's `npm i -g @piwebui/pi-web` plus `pi install
+ * npm:@piwebui/pi-web-bridge` is only coherent when both `latest` tags point at the *same cut*.
+ * They did not: the bridge's `0.1.0` was hand-published 18 hours after the server's `0.1.0` (the
+ * trusted-publisher bootstrap could not reuse a version, so it reused the *number*), and the two
+ * `latest` artifacts speak transports that do not exist on the other side. Same version string,
+ * different release, invisible to every per-package check — so compare publish times too.
+ *
+ * Runs before anything is installed: it is the cheapest check here and the one that explains every
+ * other failure of this shape.
+ */
+async function checkReleaseSet(version: string, tag: string) {
+  const others = publishablePackages().filter((p) => p.name !== pkgName);
+  const members = [pkgName, ...others.map((p) => p.name)];
+  if (allowMissing.size) {
+    console.log(`   note: a package was not published this run (--allow-missing); release-set check skipped`);
+    return;
+  }
+  const times = new Map<string, string>();
+  for (const pkg of members) {
+    const t = await viewSettled(["view", pkg, `dist-tags.${tag}`, "--json"]);
+    const got = String(JSON.parse(t.stdout || "null") ?? "");
+    if (t.status !== 0 || got !== version) {
+      fail(`--all: ${pkg} dist-tag "${tag}" points at ${got || "nothing"}, not ${version} — the release set is not on one version.`);
+    }
+    const r = await viewSettled(["view", pkg, "time", "--json"]);
+    if (r.status !== 0) {
+      console.log(`   note: could not read publish times for ${pkg}; release-set timing check skipped`);
+      return;
+    }
+    const table = JSON.parse(r.stdout || "{}") as Record<string, string>;
+    const at = table[version];
+    if (!at) {
+      console.log(`   note: ${pkg} has no publish time for ${version}; release-set timing check skipped`);
+      return;
+    }
+    times.set(pkg, at);
+  }
+  const stamps = [...times.entries()].map(([n, s]) => ({ n, ms: Date.parse(s) }));
+  const newest = Math.max(...stamps.map((s) => s.ms));
+  const stale = stamps.filter((s) => newest - s.ms > SET_WINDOW_HOURS * 3_600_000);
+  const detail = stamps
+    .sort((a, b) => a.ms - b.ms)
+    .map((s) => `${s.n}@${version} ${new Date(s.ms).toISOString()}`)
+    .join("; ");
+  if (stale.length) {
+    fail(
+      `--all: "${tag}" is not one release. ${tag} resolves to ${version} for all ${stamps.length} packages, but ` +
+        `${stale.map((s) => s.n).join(" and ")} ${stale.length > 1 ? "were" : "was"} published more than ` +
+        `${SET_WINDOW_HOURS}h before the newest of the set (${detail}). A plain \`npm i -g ${pkgName}\` and ` +
+        "`pi install npm:@piwebui/pi-web-bridge` therefore install two code states that never shipped " +
+        "together, however identical their version numbers look. Cut one release that moves every tag at " +
+        "once: bump all manifests to a fresh version, then `git tag v<ver> && git push origin v<ver>`.",
+    );
+  }
+  ok(
+    `release set on "${tag}" is one cut: ${stamps.length} packages at ${version}, published within ` +
+      `${Math.max(1, Math.round((newest - Math.min(...stamps.map((s) => s.ms))) / 60_000))} min`,
+  );
+}
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "piweb-verify-"));
 process.on("exit", () => fs.rmSync(tmp, { recursive: true, force: true }));
@@ -148,7 +249,11 @@ const binMap: Record<string, string> =
   typeof rawBin === "string" ? { [pkgName]: rawBin } : (rawBin ?? {});
 ok(`${spec} -> ${version}${expectVersion ? ` (as expected)` : ""}`);
 
-// 2. does the published manifest put every documented command on PATH?
+// 2. is the whole publishable set actually on this one release? Before any install work, because
+// a mixed set makes every per-package check below pass while the product is still broken.
+if (all && flag("tag")) await checkReleaseSet(version, flag("tag"));
+
+// 3. does the published manifest put every documented command on PATH?
 const shipped = Object.keys(binMap);
 if (!shipped.length) {
   fail(`${version} declares no \`bin\` at all, so \`npm i -g ${pkgName}\` installs a package with no command on PATH.`);
@@ -164,7 +269,7 @@ for (const name of CLI_NAMES) {
 }
 ok(`bin map declares ${CLI_NAMES.map((n) => `\`${n}\``).join(", ")}`);
 
-// 3. is each declared target actually inside the shipped tarball?
+// 4. is each declared target actually inside the shipped tarball?
 const packed = npm(["pack", spec, "--pack-destination", tmp]);
 if (packed.status !== 0) fail(`npm pack ${spec} failed: ${(packed.stdout + packed.stderr).trim().slice(0, 400)}`);
 const tarball = fs.readdirSync(tmp).filter((f) => f.endsWith(".tgz")).map((f) => path.join(tmp, f))[0];
@@ -188,7 +293,7 @@ for (const must of ["dist/main.js", "client-dist/index.html"]) {
 const declaredTargets = [...new Set(CLI_NAMES.map((n) => (binMap[n] ?? "").replace(/^\.\//, "")))].filter(Boolean);
 ok(`tarball contains ${declaredTargets.join(", ")}, dist/main.js and client-dist/index.html (${entries.size} files)`);
 
-// 4. the real user path: global install into a scratch prefix, run from a foreign cwd.
+// 5. the real user path: global install into a scratch prefix, run from a foreign cwd.
 const prefix = path.join(tmp, "prefix");
 fs.mkdirSync(prefix, { recursive: true });
 // Wait out the dependencies first (see waitForVersion): the canary manifests pin every internal
@@ -227,10 +332,47 @@ for (const name of CLI_NAMES) {
   ok(`\`${name} --version\` -> ${out.trim()}`);
 }
 
+// 6. the published CLI must dispatch every subcommand the docs promise — but only when this
+// checkout *is* that release. Main's docs legitimately run ahead of the last stable, and a check
+// that failed on every commit after a release would be noise instead of a signal; comparing the
+// tree manifest version to the verified version makes the gate fire exactly at a release cut and
+// at any drift of `latest` away from it. This is the half of the incident one level below the
+// `bin` map: `@piwebui/pi-web@0.1.0` has no `doctor`, `install-extension`, `pair` or
+// `rotate-bridge-token` at all, so every bridge instruction in the README lands on usage text.
+const treeVersion = (() => {
+  try { return readServerManifest().version; } catch { return ""; }
+})();
+if (pkgName === SERVER_PKG_NAME && version === treeVersion) {
+  const extract = path.join(tmp, "published");
+  fs.mkdirSync(extract, { recursive: true });
+  const x = spawnSync("tar", ["xzf", tarball, "-C", extract], { encoding: "utf8" });
+  if (x.status !== 0) fail(`could not unpack ${tarball}: ${x.stderr.slice(0, 200)}`);
+  const mainJs = path.join(extract, pkgRoot, "dist", "main.js");
+  if (!fs.existsSync(mainJs)) fail("the published tarball has no dist/main.js, so nothing can dispatch a subcommand");
+  const publishedSrc = fs.readFileSync(mainJs, "utf8");
+  const subs = new Map<string, string[]>();
+  for (const d of documentedSubcommands(docFiles())) subs.set(d.token, [...(subs.get(d.token) ?? []), `${d.file}:${d.line}`]);
+  const absent: string[] = [];
+  for (const sub of [...subs.keys()].sort()) {
+    if (!new RegExp(`\\bcmd\\s*===\\s*["']${sub}["']`).test(publishedSrc)) absent.push(sub);
+  }
+  if (absent.length) {
+    fail(
+      `${version} cannot run ${absent.map((s) => `\`${CLI_PRIMARY} ${s}\``).join(", ")}: the docs in this checkout ` +
+        `promise them but the published dist/main.js dispatches none of them, so a reader following the README ` +
+        `against \`npm i -g ${pkgName}\` gets usage text where a feature should be. Publish the version whose ` +
+        `CLI has them (\`git tag v<ver> && git push origin v<ver>\`).`,
+    );
+  }
+  ok(`${subs.size} documented subcommands dispatch in the published dist/main.js`);
+} else if (pkgName === SERVER_PKG_NAME) {
+  console.log(`   note: skipping the subcommand check; this checkout documents ${treeVersion}, not ${version}`);
+}
+
 console.log(`\n${pkgName}@${version} is installable and answers to ${CLI_NAMES.map((n) => `\`${n}\``).join(" and ")}.`);
 
 /**
- * 5. every other publishable package, so a release is proven for the whole set.
+ * 7. every other publishable package, so a release is proven for the whole set.
  *
  * The tarball inspection is per package: the bridge is a `pi` extension whose whole contract
  * is the file listed under `pi.extensions`, so a published tarball that omits it installs
@@ -239,19 +381,8 @@ console.log(`\n${pkgName}@${version} is installable and answers to ${CLI_NAMES.m
  */
 if (all) {
   const tag = flag("tag");
-  const allowMissing = new Set(flag("allow-missing").split(/\s+/).filter(Boolean));
   const others = publishablePackages().filter((p) => p.name !== pkgName);
   const skipped: string[] = [];
-  const viewSettled = async (args: string[]) => {
-    let r = npm(args);
-    while (r.status !== 0 && Date.now() < lagDeadline) {
-      const step = 15_000;
-      console.log(`   ${args[1]} not visible yet; retrying in ${step / 1000}s`);
-      await sleep(step);
-      r = npm(args);
-    }
-    return r;
-  };
   if (!others.length) ok("--all: no other publishable packages to check");
   for (const pkg of others) {
     if (allowMissing.has(pkg.name)) {
@@ -294,6 +425,7 @@ if (all) {
     }
     ok(`${pkg.name}@${version}${tag ? ` on "${tag}"` : ""}: ${files.length} files${pkg.piExtensions.length ? `, pi extensions present (${pkg.piExtensions.length})` : ""}`);
   }
+
   const checked = others.length - skipped.length;
   if (checked) console.log(`\n${checked} of ${others.length + 1} publishable packages verified at ${version}${skipped.length ? `; ${skipped.length} skipped (${skipped.join(", ")})` : ""}.`);
 }

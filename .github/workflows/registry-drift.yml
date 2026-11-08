@@ -1,0 +1,97 @@
+name: registry drift
+
+# Does what a stranger gets from npm *today* still match what this repository documents?
+#
+# Nothing in the release pipeline re-checks `latest` after a release ships. That is how the
+# `pi-web: command not found` report stayed alive for a day after it was root-caused and fixed in
+# the tree: the fix was real, `0.1.0` was immutable, and `latest` only moves when someone pushes a
+# tag — so the published artifact and the README drifted apart silently, and the only witness was a
+# user on a Mac typing `pi-web`.
+#
+# This workflow is that witness. It runs the registry-side checks with no publish in front of them:
+#
+#   * `npm run verify:published -- --tag latest --all` — resolves `latest` for every publishable
+#     package, requires the set to be one release (same version *and* published within one window,
+#     which is what caught `@piwebui/pi-web@0.1.0` from Nov 7 sitting next to
+#     `@piwebui/pi-web-bridge@0.1.0` from Nov 8), requires the documented `bin` names, packs the
+#     tarball, installs it into a scratch prefix and runs `pi-web --version` for real;
+#   * the subcommand half of that check compares the published `dist/main.js` with the docs in this
+#     checkout and self-disables once main's manifests move past the released version, so main's
+#     normal lead over the last stable can never read as drift.
+#
+# A red run here means one of two things, and both are fixed the same way: cut the release
+# (`git tag v<ver> && git push origin v<ver>`), or stop documenting a command you do not ship.
+#
+# `verify:published` is not a tree check: it talks to the live registry, installs from it, and
+# needs no publish credentials at all, so this can run on a schedule without secrets.
+
+on:
+  schedule:
+    # 06:17 UTC daily. Off the hour on purpose: every scheduled job in the ecosystem lands on :00
+    # and the runner queue is what makes a 5-minute check look broken at 06:00.
+    - cron: "17 6 * * *"
+  workflow_dispatch: {}
+  # Also after a release touches the gates themselves, so a broken check is caught by the PR that
+  # broke it rather than by the next morning's schedule.
+  push:
+    branches: [main]
+    paths:
+      - scripts/verify-published.mts
+      - scripts/cli-names.mts
+      - scripts/publish-list.mts
+      - packages/server/package.json
+
+permissions:
+  contents: read
+
+concurrency:
+  group: registry-drift
+  cancel-in-progress: true
+
+jobs:
+  latest:
+    name: what npm hands a fresh install
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24.x"
+          registry-url: https://registry.npmjs.org
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Install pi at the validated version (the installed CLI version-gates against it)
+        run: npm install -g @earendil-works/pi-coding-agent@1.5.0
+
+      - name: Tree contract (docs vs. manifest vs. dispatcher)
+        run: npm run check:cli
+
+      - name: Registry contract (what `npm i -g @piwebui/pi-web` actually gets)
+        # --settle outlasts npm's read replica so a lagging CDN is never reported as drift; 300s
+        # is enough for a normal publish and short enough that a real failure is still actionable.
+        run: npm run verify:published -- --tag latest --all --settle 300
+
+      - name: What the two install commands resolve to right now
+        # Printed even on success: when someone files "the new command does not work", the answer
+        # starts here. `dist-tags.<tag>` and not `<tag>.version` — the latter answers empty + exit 0.
+        if: always()
+        run: |
+          set -euo pipefail
+          names=$(node scripts/publish-list.mts --gh | sed -n 's/^names=//p')
+          for n in $names; do
+            printf "%-26s latest=%s next=%s\n" "$n" \
+              "$(npm view "$n" dist-tags.latest 2>/dev/null || echo none)" \
+              "$(npm view "$n" dist-tags.next 2>/dev/null || echo none)"
+            echo "  bin: $(npm view "$n" bin --json 2>/dev/null || echo '{}')"
+          done
+          echo
+          bridge=$(npm view @piwebui/pi-web-bridge dist-tags.latest 2>/dev/null || echo NOTHING)
+          server=$(npm view @piwebui/pi-web dist-tags.latest 2>/dev/null || echo NOTHING)
+          echo "A stranger today runs: npm i -g @piwebui/pi-web@$server  +  pi install npm:@piwebui/pi-web-bridge@$bridge"
+          if [ "$bridge" != "$server" ]; then
+            echo "::warning::the two installs land on different versions: the bridge and the server must ship as one set"
+          fi
