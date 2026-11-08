@@ -9,7 +9,7 @@
     "./*": "./dist/*.js"
   },
   "dependencies": {
-    "typebox": "1.3.27"
+    "typebox": "1.4.4"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
