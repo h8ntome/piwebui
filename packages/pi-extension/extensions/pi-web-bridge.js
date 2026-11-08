@@ -1294,6 +1294,55 @@ function liveIdOf(hub, msg) {
   return id;
 }
 
+/**
+ * The tracker for a message handed to `message_start/update/end`.
+ *
+ * Object identity is *not* stable here: pi passes a fresh message object for every streamed
+ * chunk, so keying previews on it (the old behaviour, `liveIdOf` alone) minted one preview per
+ * token — duplicate assistant rows in the browser, each stuck on "working", replayed on every
+ * reload and growing without bound (BUG-004). Trackers are therefore keyed by their own id and
+ * re-associated to the newest object positionally: the same object if we have seen it, otherwise
+ * the most recent still-open tracker of the same role. The managed host already works this way.
+ */
+function trackerFor(hub, msg, role, { create = true } = {}) {
+  const byObj = msg && typeof msg === "object" ? liveIds.get(msg) : null;
+  const existing = byObj ? hub.previews.get(byObj) : null;
+  if (existing) { existing.msg = msg; return existing; }
+  for (let i = hub.previewOrder.length - 1; i >= 0; i--) {
+    const p = hub.previews.get(hub.previewOrder[i]);
+    if (p && !p.done && p.role === role) { try { liveIds.set(msg, p.liveMessageId); } catch { /* non-object */ } p.msg = msg; return p; }
+  }
+  if (!create) return null;
+  const id = liveIdOf(hub, msg);
+  const p = { msg, liveMessageId: id, role, rev: 0, done: false, startedAt: nowIso(), bytes: 0 };
+  hub.previews.set(id, p);
+  hub.previewOrder.push(id);
+  while (hub.previewOrder.length > LIMITS.maxPreviews) {
+    const dropId = hub.previewOrder.shift();
+    if (dropId === id) { hub.previewOrder.push(dropId); continue; }
+    const drop = hub.previews.get(dropId);
+    // A preview evicted while still open was never closed by a message_end: say `done` out loud
+    // so the browser stops showing it as an in-flight row.
+    if (drop && !drop.done) { drop.done = true; hub.broadcast("message_end", { liveMessageId: drop.liveMessageId, preview: snapshotPreview(drop) }); }
+    hub.previews.delete(dropId);
+  }
+  return p;
+}
+
+/** Close everything still streaming: after a turn or a settle nothing more can arrive. */
+function closeOpenPreviews(hub, role) {
+  for (const id of [...hub.previewOrder]) {
+    const p = hub.previews.get(id);
+    if (!p || p.done || (role && p.role !== role)) continue;
+    p.done = true;
+    p.rev++;
+    const t = hub.previewThrottle.get(id);
+    if (t) { clearTimeout(t); hub.previewThrottle.delete(id); }
+    hub.broadcast("message_end", { liveMessageId: p.liveMessageId, preview: snapshotPreview(p) });
+  }
+}
+
+
 export function createInstanceApi(hub) {
   hub.bindInstance = (pi) => {
     hub.pi = pi;
@@ -1482,52 +1531,40 @@ export function attach(hub, pi, { wire = true } = {}) {
   on("agent_start", () => { hub.touch(); hub.broadcast("agent_start", {}); });
   on("agent_settled", (e) => {
     hub.lastSettled = { at: nowIso(), aborted: !!e.aborted };
+    closeOpenPreviews(hub); // the agent has settled: no preview is still streaming
     hub.touch();
     hub.broadcast("agent_settled", { aborted: !!e.aborted });
   });
 
-  const previewOf = (msg, role) => {
-    const id = liveIdOf(hub, msg);
-    let p = hub.previews.get(id);
-    if (!p) {
-      p = { msg, liveMessageId: id, role, rev: 0, done: false, startedAt: nowIso(), bytes: 0 };
-      hub.previews.set(id, p);
-      hub.previewOrder.push(id);
-      while (hub.previewOrder.length > LIMITS.maxPreviews) hub.previews.delete(hub.previewOrder.shift());
-    }
-    return p;
-  };
-
   on("message_start", (e) => {
     const role = e.message?.role === "user" ? "user" : "assistant";
-    const p = previewOf(e.message, role);
+    const p = trackerFor(hub, e.message, role);
     hub.touch();
     hub.broadcast("message_start", { liveMessageId: p.liveMessageId, role });
   });
   on("message_update", (e) => {
-    const p = previewOf(e.message, e.message?.role === "user" ? "user" : "assistant");
+    const p = trackerFor(hub, e.message, e.message?.role === "user" ? "user" : "assistant");
     p.rev++;
     throttledPreview(p);
   });
   on("message_end", (e) => {
-    const id = liveIdOf(hub, e.message);
-    const p = hub.previews.get(id);
+    const p = trackerFor(hub, e.message, e.message?.role === "user" ? "user" : "assistant", { create: false });
     if (p) {
       p.done = true;
       p.rev++;
-      const t = hub.previewThrottle.get(id);
-      if (t) { clearTimeout(t); hub.previewThrottle.delete(id); }
+      const t = hub.previewThrottle.get(p.liveMessageId);
+      if (t) { clearTimeout(t); hub.previewThrottle.delete(p.liveMessageId); }
       hub.broadcast("message_end", previewFrame(p));
     }
     hub.touch();
   });
   on("turn_end", (e) => {
-    const id = liveIdOf(hub, e.message);
-    const p = hub.previews.get(id);
-    if (p) {
-      p.mappedEntryId = e.messageEntryId;
-      p.done = true;
-    }
+    const p = trackerFor(hub, e.message, e.message?.role === "user" ? "user" : "assistant", { create: false });
+    if (p) p.mappedEntryId = e.messageEntryId;
+    // Whatever this turn left open is finished business, not a live stream (BUG-004). Closing here
+    // (rather than silently marking the mapped one done) means every listener gets a definitive
+    // `message_end` for it instead of having to infer the end from the turn frame.
+    closeOpenPreviews(hub, "assistant");
     hub.touch();
     // `messageEntryId` is the mapping that lets the browser collapse a live preview into the
     // persisted entry instead of showing the same assistant message twice.

@@ -415,6 +415,56 @@ test("a pi that started BEFORE pi-web dials it on its own, within the retry cap 
   assert.ok(Date.now() - t0 < 12_000);
 });
 
+test("a streamed answer re-keyed per chunk stays ONE preview (BUG-004)", async () => {
+  const { hub, inst } = startBridge(h.descriptorFile, { sessionId: "sid-int-preview-leak" });
+  await startSession(inst, "startup");
+  await until("attach", 6000, () => h.attached.some((a) => a.hello.sessionId === "sid-int-preview-leak"));
+  const conn = h.attached.find((a) => a.hello.sessionId === "sid-int-preview-leak")!.conn;
+  const frames: { name: string; payload: Record<string, unknown> }[] = [];
+  conn.onEvent((e) => frames.push({ name: e.name, payload: (e.payload ?? {}) as Record<string, unknown> }));
+
+  // The shape that broke it: pi hands a *fresh* message object for every streamed chunk, so the
+  // old object-identity keying minted a new preview per token. The browser showed one duplicate
+  // assistant row per chunk, each stuck on "working", and re-showed them on every reload.
+  const chunks = ["He", "Hel", "Hello", "Hello the", "Hello there"];
+  const objs = chunks.map((text) => ({ role: "assistant", content: [{ type: "text", text }] }));
+  await emit(inst, "message_start", { message: objs[0] });
+  for (const o of objs) { await emit(inst, "message_update", { message: o }); await sleep(50); }
+  await emit(inst, "message_end", { message: objs[objs.length - 1] });
+  await emit(inst, "turn_end", { message: objs[objs.length - 1], messageEntryId: "entry-77", toolResultEntryIds: [], turnIndex: 0 });
+  await sleep(80);
+
+  const previewIds = new Set(frames.map((f) => (f.payload as { liveMessageId?: string }).liveMessageId).filter(Boolean));
+  assert.equal(previewIds.size, 1, `one answer must be one preview, saw ${previewIds.size}: ${[...previewIds].join(",")}`);
+  const snap = (hub as unknown as { state?: () => { previews: unknown[] } }).state?.();
+  void snap;
+  const lastPreviewFrame = [...frames].reverse().find((f) => f.name === "message_end")?.payload as { preview?: { done?: boolean; blocks?: { block: { text?: string }[] }[] } } | undefined;
+  assert.ok(lastPreviewFrame?.preview?.done, "the answer is closed, not left streaming");
+  assert.equal(lastPreviewFrame?.preview?.blocks?.[0]?.block?.text, "Hello there", "and carries the full text, not the first chunk");
+  hub.closeAll();
+});
+
+test("a turn that never sends message_end still closes its previews (BUG-004)", async () => {
+  const { hub, inst } = startBridge(h.descriptorFile, { sessionId: "sid-int-preview-orphan" });
+  await startSession(inst, "startup");
+  await until("attach", 6000, () => h.attached.some((a) => a.hello.sessionId === "sid-int-preview-orphan"));
+  const conn = h.attached.find((a) => a.hello.sessionId === "sid-int-preview-orphan")!.conn;
+  const frames: { name: string; payload: Record<string, unknown> }[] = [];
+  conn.onEvent((e) => frames.push({ name: e.name, payload: (e.payload ?? {}) as Record<string, unknown> }));
+
+  const first = { role: "assistant", content: [{ type: "text", text: "abruptly" }] };
+  await emit(inst, "message_start", { message: first });
+  await emit(inst, "message_update", { message: { role: "assistant", content: [{ type: "text", text: "abruptly stopp" }] } });
+  await sleep(60);
+  // No message_end at all: turn_end has to close it, or the row shimmer-forever.
+  await emit(inst, "turn_end", { message: first, messageEntryId: null, toolResultEntryIds: [], turnIndex: 0 });
+  await sleep(60);
+  const closed = frames.filter((f) => f.name === "message_end");
+  assert.ok(closed.length >= 1, "turn_end emitted a close for the open preview");
+  assert.ok((closed[closed.length - 1]!.payload as { preview?: { done?: boolean } }).preview?.done, "the close says done");
+  hub.closeAll();
+});
+
 test("a stale socket file from a dead server is taken over, a live one is not (H-04)", async () => {
   const dir = tmp("piweb-stale-");
   const store = new Store(path.join(dir, "metadata.db"));

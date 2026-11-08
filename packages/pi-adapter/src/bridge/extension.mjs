@@ -550,11 +550,11 @@ export default function piWebBridge(pi) {
     if (p) {
       liveMessageId = p.liveMessageId;
       if (e.messageEntryId) p.mappedEntryId = e.messageEntryId;
-      p.done = true;
     }
     // Any assistant preview this turn left open is finished business, not a live stream: leaving
     // them open is what duplicated transcript rows and stuck the "working" shimmer on a bridged
-    // session (BUG-004).
+    // session (BUG-004). Closing them here also *announces* the close, so a listener never has to
+    // infer the end of a stream from the turn frame alone.
     closeOpenPreviews("assistant");
     touch();
     broadcast("turn_end", {
