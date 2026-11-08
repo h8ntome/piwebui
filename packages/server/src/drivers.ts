@@ -9,9 +9,10 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { fork, type ChildProcess } from "node:child_process";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { DISPATCH_ACK_TIMEOUT_MS, HEALTH_MAX_MISSES, HEALTH_PING_MS, MAX_RECORD_BYTES, type Capabilities } from "@piwebui/shared";
 import { logInfo, logWarn } from "./log.ts";
+import { resolveAdapterScript } from "./adapterPaths.ts";
 import { LfFramer, decodeRecord } from "@piwebui/pi-adapter/tail";
 
 export type DriverEvent = { name: string; payload: Record<string, unknown> };
@@ -283,9 +284,6 @@ export class BridgeDiscovery {
 
 /* ---------------- managed host ---------------- */
 
-const HOST_SRC = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "pi-adapter", "src", "host", "main.ts");
-const HOST_DIST = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "pi-adapter", "dist", "host", "main.js");
-
 export class ManagedHandle implements Driver {
   kind = "managed" as const;
   runtimeId = "pending";
@@ -299,6 +297,9 @@ export class ManagedHandle implements Driver {
   private eventCbs: ((e: DriverEvent) => void)[] = [];
   private deadCb: ((reason: "exited" | "lost" | "disposed", code: number | null, signal: string | null) => void) | null = null;
   private dead = false;
+  /** Bounded tail of host stderr, kept so an unexpected exit can be explained instead of guessed at. */
+  private stderrTail = "";
+  private bootedOnce = false;
   private initArgs: Record<string, unknown>;
   private pingTimer: NodeJS.Timeout | null = null;
   private missedPongs = 0;
@@ -318,12 +319,19 @@ export class ManagedHandle implements Driver {
       // mirrors it to a file so host crashes are diagnosable.
       const dbg = process.env.PIWEB_HOST_DEBUG;
       if (dbg) { try { fs.appendFileSync(dbg, `[host ${String(initArgs.sessionDir ?? initArgs.cwd ?? "?")}] ${buf.toString()}`); } catch { /* ignore */ } }
+      // Keep a short tail regardless: a host that dies during boot produced no user content, and
+      // "exited during boot (1)" on its own is not actionable for the person reading the log.
+      this.stderrTail = (this.stderrTail + buf.toString("utf8")).slice(-4_000);
     });
     this.ready = new Promise<void>((resolve, reject) => {
       const t = setTimeout(() => reject(new Error("managed host boot timeout")), 600_000);
-      this.bootResolve = () => { clearTimeout(t); if (this.initTimer) clearInterval(this.initTimer); resolve(); };
+      this.bootResolve = () => { this.bootedOnce = true; clearTimeout(t); if (this.initTimer) clearInterval(this.initTimer); resolve(); };
       this.bootReject = (e) => { clearTimeout(t); if (this.initTimer) clearInterval(this.initTimer); reject(e); };
-      this.child.once("exit", (code) => { try { this.bootReject?.(new Error(`host exited during boot (${code})`)); } catch { /* resolved */ } });
+      this.child.once("exit", (code) => {
+        const why = `host exited during boot (${code})`;
+        const tail = this.stderrTail.replace(/\s+/g, " ").trim().slice(-300);
+        try { this.bootReject?.(new Error(tail ? `${why}: ${tail}` : why)); } catch { /* resolved */ }
+      });
     });
     // Handshake: sending init once at fork time races the child's listener attach
     // under startup contention. The child announces host_ready when its listener is
@@ -417,6 +425,16 @@ export class ManagedHandle implements Driver {
   private die(reason: "exited" | "lost" | "disposed", code: number | null, signal: string | null) {
     if (this.dead) return;
     this.dead = true;
+    if (reason !== "disposed") {
+      // An exit nobody asked for: say so, with the exit code and (before boot) the stderr tail.
+      logWarn("managed_host_exit", {
+        runtime: this.runtimeId, pid: this.pid, reason, code, signal,
+        booted: this.bootedOnce, cwd: this.cwd ?? null,
+        stderr: this.bootedOnce ? "" : this.stderrTail.replace(/\s+/g, " ").trim().slice(-300),
+      });
+    } else {
+      logInfo("managed_host_exit", { runtime: this.runtimeId, pid: this.pid, reason, code, signal });
+    }
     if (this.pingTimer) clearInterval(this.pingTimer);
     for (const [, p] of this.pending) { clearTimeout(p.timer); p.reject(Object.assign(new Error("managed host exited"), { code: "host_unavailable" })); }
     this.pending.clear();
@@ -432,16 +450,7 @@ export class ManagedHandle implements Driver {
 }
 
 export function spawnManagedHost(initArgs: { cwd: string; agentDir?: string; sessionDir?: string; model?: { provider: string; modelId: string }; thinkingLevel?: string; name?: string }, gen: number, env: Record<string, string>): ManagedHandle {
-  const script = fs.existsSync(HOST_DIST) ? HOST_DIST : HOST_SRC;
-  // Absolute loader path: resolving the bare "tsx" specifier costs ~30s on cold FS.
-  const TSX_LOADER = (() => {
-    for (const c of [path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "tsx", "dist", "loader.mjs"),
-                     path.join(process.cwd(), "node_modules/tsx/dist/loader.mjs")]) {
-      if (fs.existsSync(c)) return c;
-    }
-    return null;
-  })();
-  const execArgv = script.endsWith(".ts") ? ["--import", TSX_LOADER ? pathToFileURL(TSX_LOADER).href : "tsx"] : [];
+  const { script, execArgv } = resolveAdapterScript(path.join("host", "main.js"), path.join("host", "main.ts"));
   const child = fork(script, [], {
     execArgv,
     env: { ...process.env, ...env, PIWEB_MANAGED_HOST: "1" },

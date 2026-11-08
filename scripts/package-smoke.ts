@@ -12,6 +12,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { CLI_NAMES, CLI_PRIMARY } from "./cli-names.mts";
+import { startMockProvider, mockModelsJson } from "../e2e/lib/mock-provider.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(HERE, "..");
@@ -162,6 +163,117 @@ if (fs.existsSync(gbin)) {
   else fail("globally installed pi-web did not answer");
   try { process.kill(-(gsrv.pid ?? 1), "SIGKILL"); } catch { /* gone */ }
   try { gsrv.kill("SIGKILL"); } catch { /* gone */ }
+}
+
+// 6. the layout `npm i -g` actually produces, and the two first things a new user does.
+// A global install nests its dependencies: @piwebui/pi-adapter lands inside
+// @piwebui/pi-web/node_modules, not beside it. The multi-root install above gets hoisted, so it
+// could never see that shape, and /health touches neither the read worker nor the managed host -
+// which is exactly how both session paths shipped broken. See full_audit/09-bugs-catalog BUG-001..003.
+{
+  const nested = path.join(tmp, "nested-prefix");
+  const nins = spawnSync("npm", ["install", "-g", "--no-audit", "--no-fund", "--prefix", nested, ...packs], { cwd: os.tmpdir(), encoding: "utf8" });
+  const nroot = path.join(nested, "lib", "node_modules");
+  const nestedInto = path.join(nroot, "@piwebui", "pi-web", "node_modules", "@piwebui");
+  if (nins.status !== 0) {
+    fail(`nested-layout global install failed: ${nins.stderr?.slice(0, 300)}`);
+  } else {
+    fs.mkdirSync(nestedInto, { recursive: true });
+    for (const dep of ["pi-adapter", "shared"]) {
+      const from = path.join(nroot, "@piwebui", dep);
+      if (fs.existsSync(from)) fs.renameSync(from, path.join(nestedInto, dep));
+    }
+    if (fs.existsSync(path.join(nroot, "@piwebui", "pi-adapter")) || !fs.existsSync(path.join(nestedInto, "pi-adapter", "dist", "read", "worker.js"))) {
+      fail("could not stage the nested layout - this row cannot prove anything");
+    } else {
+      ok("nested (npm i -g) layout staged: @piwebui/pi-adapter inside @piwebui/pi-web/node_modules");
+      const nbin = path.join(nested, "bin", CLI_PRIMARY);
+      const mock = await startMockProvider();
+      const agentHome = path.join(tmp, "nested-agent");
+      fs.mkdirSync(agentHome, { recursive: true });
+      fs.writeFileSync(path.join(agentHome, "models.json"), mockModelsJson(mock.url));
+      const wsDir = path.join(tmp, "nested-ws");
+      fs.mkdirSync(wsDir, { recursive: true });
+      fs.writeFileSync(path.join(wsDir, "README.md"), "# nested layout smoke\n");
+      const ndata = path.join(tmp, "nested-data");
+      const nport = 4096 + Math.floor(Math.random() * 4096);
+      const al = spawnSync(nbin, ["allow", wsDir, "--data-dir", ndata], { cwd: os.tmpdir(), encoding: "utf8", timeout: 60_000 });
+      if (al.status !== 0) fail(`nested pi-web allow failed: ${(al.stderr || al.stdout).slice(0, 200)}`);
+      else {
+        let glog = "";
+        const nsrv = spawn(nbin, ["serve", "--port", String(nport), "--data-dir", ndata, "--agent-dir", agentHome, "--no-open"], {
+          cwd: os.tmpdir(), stdio: ["ignore", "pipe", "pipe"], detached: true,
+          env: { ...process.env, PI_CODING_AGENT_DIR: agentHome, PI_SKIP_VERSION_CHECK: "1" },
+        });
+        nsrv.stdout?.on("data", (d) => { glog += d; });
+        nsrv.stderr?.on("data", (d) => { glog += d; });
+        nsrv.unref();
+        const base = `http://127.0.0.1:${nport}/api/v1`;
+        const jar: string[] = [];
+        let csrf = "";
+        try {
+          const up0 = Date.now();
+          let up = false;
+          for (let i = 0; i < 90 && !up; i++) {
+            await new Promise((r) => setTimeout(r, 500));
+            try { up = (await fetch(`${base}/health`)).ok; } catch { /* not yet */ }
+          }
+          if (!up) throw new Error(`nested server never answered /health (${Date.now() - up0} ms): ${glog.slice(-400)}`);
+          const who = await fetch(`${base}/auth/me`);
+          const c = who.headers.get("set-cookie");
+          if (c) jar.push(c.split(";")[0]!);
+          const csrfBody = (await (await fetch(`${base}/auth/csrf`, { headers: { cookie: jar.join("; ") } })).json().catch(() => ({}))) as { csrf?: string };
+          csrf = String(csrfBody.csrf ?? "");
+          if (!csrf) throw new Error(`no CSRF token from /auth/csrf: ${glog.slice(-400)}`);
+          const hdr = { cookie: jar.join("; ") } as Record<string, string>;
+
+          // (a) read worker: the session list must come back, and come back fast.
+          const t0 = Date.now();
+          const list = await fetch(`${base}/sessions`, { headers: hdr });
+          const listMs = Date.now() - t0;
+          const listBody = (await list.json().catch(() => null)) as { sessions?: unknown[] } | null;
+          if (list.status === 200 && listBody && Array.isArray(listBody.sessions) && listMs < 10_000) {
+            ok(`nested install: GET /sessions -> 200 in ${listMs} ms (read worker resolves)`);
+          } else {
+            fail(`nested install: GET /sessions -> ${list.status} after ${listMs} ms (${JSON.stringify(listBody)?.slice(0, 160)}) - the read worker script does not resolve in a nested layout`);
+          }
+
+          // (b) managed host: creating a session must actually boot a runtime.
+          const wl = (await (await fetch(`${base}/workspaces`, { headers: hdr })).json().catch(() => null)) as { workspaces?: { workspaceKey: string }[] } | null;
+          const create = await fetch(`${base}/sessions`, {
+            method: "POST",
+            headers: { ...hdr, "content-type": "application/json", "x-piweb-csrf": csrf },
+            body: JSON.stringify({ workspaceKey: wl?.workspaces?.[0]?.workspaceKey }),
+          });
+          const created = (await create.json().catch(() => null)) as { sessionKey?: string } | null;
+          if (create.status !== 201 || !created?.sessionKey) {
+            fail(`nested install: POST /sessions -> ${create.status} (${JSON.stringify(created)?.slice(0, 200)})`);
+          } else {
+            let booted = false;
+            const deadline = Date.now() + 60_000;
+            while (!booted && Date.now() < deadline) {
+              await new Promise((r) => setTimeout(r, 1_000));
+              const st = (await (await fetch(`${base}/sessions/${created.sessionKey}`, { headers: hdr })).json().catch(() => null)) as { status?: { runtime?: { pid?: number } } } | null;
+              booted = Number(st?.status?.runtime?.pid ?? 0) > 0;
+            }
+            if (booted) ok("nested install: POST /sessions -> 201 and the managed host booted (pid reported)");
+            else fail("nested install: the created session never reported a host pid - the managed host script does not resolve in a nested layout");
+          }
+
+          // (c) nothing failure-shaped may be hiding in the log either.
+          for (const ev of ["read_worker_exit", "read_worker_unresolvable", "read_worker_spawn_failed", "managed_boot_failed"]) {
+            if (glog.includes(`"event":"${ev}"`)) fail(`nested install: server logged ${ev}: ${glog.split("\n").filter((l) => l.includes(ev)).join(" | ").slice(0, 400)}`);
+          }
+        } catch (e) {
+          fail(`nested install: probe errored - ${(e as Error).message}`);
+        } finally {
+          try { process.kill(-(nsrv.pid ?? 1), "SIGKILL"); } catch { /* gone */ }
+          try { nsrv.kill("SIGKILL"); } catch { /* gone */ }
+          await mock.close();
+        }
+      }
+    }
+  }
 }
 
 fs.rmSync(tmp, { recursive: true, force: true });
