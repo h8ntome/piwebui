@@ -19,6 +19,8 @@ export const MAX_JSON_DEPTH = 64;
 export const MAX_RECORD_BYTES = 64 * 1024 * 1024;
 /** File viewer text cap (security.md: 2 MiB). */
 export const MAX_FILE_VIEW_BYTES = 2 * 1024 * 1024;
+/** Text is handed to the browser in preview-sized pieces; the panel never injects a whole file. */
+export const MAX_FILE_PREVIEW_BYTES = 256 * 1024;
 /** Raw session download/read chunk bounds. */
 export const RAW_RANGE_MAX_BYTES = 4 * 1024 * 1024;
 
@@ -73,8 +75,24 @@ export const SESSION_COOKIE_NAME = "piweb_session";
 export const CSRF_HEADER_NAME = "x-piweb-csrf";
 
 /** Pi versions whose adapter has been validated end-to-end by this build.
- * Unlisted versions are read-only until e2e compatibility probes pass (D-14). */
+ * Unlisted versions are read-only until e2e compatibility probes pass (D-14).
+ * Kept as the canonical list; `PI_VALIDATED_VERSIONS` is the plan-03 (§8) name for it. */
 export const TESTED_PI_VERSIONS: readonly string[] = ["1.5.0"];
+export const PI_VALIDATED_VERSIONS: readonly string[] = TESTED_PI_VERSIONS;
+/** Bridge wire protocols this build speaks (03 §8). */
+export const PI_SUPPORTED_PROTOCOLS: readonly number[] = [1];
+
+/**
+ * Escape hatch for the fail-closed version gate (B-10): `PIWEB_ALLOW_PI_VERSIONS=1.6.0,1.7.0`.
+ * Writes stay disabled on any version that is neither validated nor listed here; reads never are.
+ */
+export function allowedPiVersions(env: NodeJS.ProcessEnv = process.env): string[] {
+  return (env.PIWEB_ALLOW_PI_VERSIONS ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+}
+export function isPiVersionAllowed(version: string | null | undefined, env: NodeJS.ProcessEnv = process.env): boolean {
+  if (!version) return false;
+  return TESTED_PI_VERSIONS.includes(version) || allowedPiVersions(env).includes(version);
+}
 
 export type ErrorCode =
   | "invalid_request"

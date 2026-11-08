@@ -8,7 +8,7 @@
  */
 import path from "node:path";
 import { open, stat } from "node:fs/promises";
-import { buildTree, computeStats, encodeCursor, fileIdentity, listSessionFiles, projectContext, readEntryById, readEntryPage, readEntryTail, safeRealpath, summarizeSessionFile } from "./pure.ts";
+import { buildTree, computeStats, encodeCursor, fileIdentity, listSessionFiles, projectContext, readEntryBefore, readEntryById, readEntryPage, readEntryTail, safeRealpath, summarizeSessionFile } from "./pure.ts";
 import { importPi, resolvePiPackage } from "../pi-resolve.ts";
 import { FINGERPRINT_BYTES } from "../tail.ts";
 import { MAX_FILE_VIEW_BYTES, RAW_RANGE_MAX_BYTES } from "@piwebui/shared";
@@ -77,6 +77,10 @@ const handlers: Record<string, (a: any) => Promise<unknown>> = {
   pageTail: async ({ file, limit }) => {
     const f = await assertAllowed(file);
     return readEntryTail(f, limit ?? 300);
+  },
+  pageBefore: async ({ file, before, limit }) => {
+    const f = await assertAllowed(file);
+    return readEntryBefore(f, String(before ?? ""), Math.max(1, Math.min(1000, limit ?? 200)));
   },
   entry: async ({ file, entryId }) => {
     const f = await assertAllowed(file);

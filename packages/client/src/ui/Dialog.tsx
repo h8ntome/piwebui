@@ -23,7 +23,7 @@ export function Dialog({ title, description, children, footer, size = "sm", onCl
   }, [onClose]);
 
   return (
-    <Portal>
+    <Portal layer="dialog">
       <div className="pw-modalRoot" role="dialog" aria-modal="true" aria-label={typeof title === "string" ? title : undefined}>
         <div className="pw-modalRoot__mask" onPointerDown={onClose} />
         <div ref={ref} className={`pw-dialog${size === "wide" ? " pw-dialog--wide" : size === "medium" ? " pw-dialog--medium" : ""}`} tabIndex={-1}>
@@ -37,5 +37,34 @@ export function Dialog({ title, description, children, footer, size = "sm", onCl
         </div>
       </div>
     </Portal>
+  );
+}
+
+/**
+ * Confirmation for destructive actions. Destructive buttons used to fire straight from a menu
+ * with no feedback at all (workspace removal), which is how allowlist entries vanished by accident.
+ */
+export function ConfirmDialog({ title, body, confirmLabel = "Confirm", cancelLabel = "Cancel", danger, onConfirm, onCancel }: {
+  title: string;
+  body: ReactNode;
+  confirmLabel?: string;
+  cancelLabel?: string;
+  danger?: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <Dialog
+      title={title}
+      onClose={onCancel}
+      footer={
+        <>
+          <button className="pw-btn pw-btn--sm pw-btn--outline" onClick={onCancel}>{cancelLabel}</button>
+          <button className={`pw-btn pw-btn--sm ${danger ? "pw-btn--danger" : "pw-btn--primary"}`} data-autofocus onClick={onConfirm}>{confirmLabel}</button>
+        </>
+      }
+    >
+      <div className="pw-confirm">{body}</div>
+    </Dialog>
   );
 }

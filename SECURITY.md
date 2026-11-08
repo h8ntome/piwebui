@@ -83,6 +83,29 @@ who can open a TCP connection to it can read and drive the sessions in your allo
 - Payload sizes are bounded (`--max-bytes`); oversized pages and dialogs return an explicit error
   instead of truncating silently.
 
+**Terminal bridge (`@piwebui/pi-web-bridge`)**
+
+- One Unix stream socket per server, `<dataDir>/bridge-<serverId>.sock`, mode `0600` inside a `0700`
+  data directory. **No network listener is opened for it** — the HTTP port, Host allowlist, CSRF and CSP
+  are all unchanged by the bridge.
+- The secret is `<dataDir>/bridge.json` (`0600`, owner-only). It carries the shared bridge token, and
+  that token is never printed in a banner, log line, CLI output or API response (`redactDescriptor`).
+- Every inbound bridge is gated in order: transport caps (connection cap, per-connection buffer, frame
+  size, rate) → token (constant-time compare, 5 s deadline) → `hello` identity → protocol negotiation →
+  **process attestation** → trust list. A rejection names its reason (`unauthorized`, `attest_failed`,
+  `duplicate_runtime`, `untrusted_runtime`, `unsupported_protocol`, `cwd_denied`, …) and those counters
+  are readable at `GET /api/v1/bridge/diagnose` and by `pi-web doctor`.
+- Attestation means: the `pid` a bridge claims must be a live process, that process must look like the
+  Pi CLI (`pi-coding-agent` in its cmdline or an argv[0] named `pi`), and its OS-observed start time must
+  match the claimed one within ±5 s. That is what stops a same-uid process from impersonating *your
+  terminal pi* with a recycled pid. `--no-attest` turns it off and is documented as not recommended.
+- Trust is recorded per runtime (`runtimes` table) and revocable: `pi-web revoke-runtime <id>` or
+  `POST /api/v1/runtimes/:id/revoke` drops it now and refuses it until it is trusted again. Set
+  `bridge.autoTrust=false` (`PIWEB_BRIDGE_AUTO_TRUST=0`) to require an explicit trust for every new runtime.
+- Bridged sessions deliberately bypass the workspace allowlist: a terminal `pi` you started yourself is
+  your own consent. If you want the old belt anyway, set `bridge.allowCwd` (`PIWEB_BRIDGE_ALLOW_CWD`)
+  to a prefix list, and `PIWEB_BRIDGE_DISABLE=1` on a `pi` opts that terminal out entirely.
+
 ## Trust model, stated plainly
 
 - **pi-web can do whatever pi can do in an allowed workspace.** A control grant is equivalent to typing
@@ -95,6 +118,13 @@ who can open a TCP connection to it can read and drive the sessions in your allo
 - Anything written to a session file can be rendered back into the browser. Treat session content from
   other people, cloned repositories, or model output as hostile input. It is sanitized on the way out
   and scoped to the origin, but it is still untrusted data.
+- **Same uid is the bridge's trust boundary, and it is not an oversight.** Node exposes no
+  `SO_PEERCRED` accessor (`getSocketCredentials`/`getPeerCredentials` are absent), so a Unix socket cannot
+  verify the peer's uid from JavaScript. Therefore: **a process running as your uid that can read
+  `~/.pi-web/bridge.json` can register a runtime and push prompts into a `pi` it can name** — exactly as a
+  process running as your uid can already type into your terminal. The layers above that floor are the
+  `0600` descriptor, the shared token, process attestation, the revocable runtime list, and
+  `PIWEB_BRIDGE_DISABLE` if you want none of it bridged.
 - **The data directory is the credential store.** `metadata.db` holds session records, workspace
   entries, hashed tokens and hashed control grants; the plaintext API tokens exist only for their
   owner and the private key for any TLS cert you configure lives beside it. Treat the data dir the way

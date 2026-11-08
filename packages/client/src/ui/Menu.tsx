@@ -6,7 +6,8 @@ import { Icon } from "../lib/icons";
 export type MenuItem =
   | { kind: "item"; label: string; icon?: string | undefined; hint?: string | undefined;
       shortcut?: string[] | undefined; selected?: boolean | undefined; danger?: boolean | undefined;
-      disabled?: boolean | undefined; title?: string | undefined; onSelect: () => void }
+      disabled?: boolean | undefined; title?: string | undefined; role?: "menuitem" | "menuitemcheckbox" | "menuitemradio" | undefined;
+      onSelect: () => void }
   | { kind: "heading"; label: string }
   | { kind: "sep" };
 
@@ -20,7 +21,8 @@ export function MenuItems({ items }: { items: MenuItem[] }) {
           <button
             key={i}
             className={`pw-menu__item${it.selected ? " pw-menu__item--selected" : ""}${it.danger ? " pw-menu__item--danger" : ""}`}
-            role="menuitem"
+            role={it.role ?? "menuitem"}
+            aria-checked={it.role && it.role !== "menuitem" ? !!it.selected : undefined}
             aria-disabled={it.disabled || undefined}
             disabled={it.disabled}
             title={it.title}
@@ -83,7 +85,22 @@ export function FloatingMenu({ anchor, items, align = "start", side = "bottom", 
   }, [anchor, align, side, width, items.length]);
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); onClose(); } };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { e.stopPropagation(); onClose(); return; }
+      // Arrow keys walk the enabled items: menus were mouse-only before (A11Y-03).
+      if (e.key === "ArrowDown" || e.key === "ArrowUp" || e.key === "Home" || e.key === "End") {
+        const nodes = Array.from(ref.current?.querySelectorAll<HTMLButtonElement>("button.pw-menu__item:not([disabled])") ?? []);
+        if (!nodes.length) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const cur = nodes.indexOf(document.activeElement as HTMLButtonElement);
+        const next = e.key === "Home" ? 0
+          : e.key === "End" ? nodes.length - 1
+          : e.key === "ArrowDown" ? (cur + 1) % nodes.length
+          : (cur <= 0 ? nodes.length - 1 : cur - 1);
+        nodes[next]?.focus();
+      }
+    };
     const onPointer = (e: PointerEvent) => { if (!ref.current?.contains(e.target as Node)) onClose(); };
     const onScroll = () => onClose();
     window.addEventListener("keydown", onKey, true);
@@ -97,6 +114,15 @@ export function FloatingMenu({ anchor, items, align = "start", side = "bottom", 
       window.removeEventListener("scroll", onScroll, true);
     };
   }, [onClose]);
+
+  // Move focus into the menu once it is placed, so Tab/Arrows/Escape all behave (A11Y-03).
+  useEffect(() => {
+    if (!pos) return;
+    const t = window.setTimeout(() => {
+      ref.current?.querySelector<HTMLButtonElement>("button.pw-menu__item:not([disabled])")?.focus();
+    }, 20);
+    return () => window.clearTimeout(t);
+  }, [pos]);
 
   if (!anchor) return null;
   return createPortal(

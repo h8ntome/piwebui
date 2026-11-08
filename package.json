@@ -11,12 +11,14 @@
   "workspaces": [
     "packages/shared",
     "packages/pi-adapter",
+    "packages/pi-extension",
     "packages/server",
     "packages/client"
   ],
   "scripts": {
-    "build": "npm run check:cli && npm run typecheck && npm run build:packages && npm run build -w @piwebui/client && node scripts/stage-client-dist.mts",
+    "build": "npm run check:cli && npm run typecheck && npm run build:packages && npm run build -w @piwebui/client && node scripts/stage-client-dist.mts && npm run stage:bridge",
     "check:cli": "tsx scripts/check-cli-names.mts",
+    "publish:list": "tsx scripts/publish-list.mts",
     "verify:published": "tsx scripts/verify-published.mts",
     "build:packages": "npm run build -w @piwebui/shared -w @piwebui/pi-adapter -w @piwebui/pi-web",
     "typecheck": "tsc -p packages/shared/tsconfig.json && tsc -p packages/pi-adapter/tsconfig.json && tsc -p packages/server/tsconfig.json && tsc -p packages/client/tsconfig.json --noEmit",
@@ -24,9 +26,11 @@
     "dev:client": "npm run dev -w @piwebui/client",
     "start": "npm run start -w @piwebui/pi-web",
     "p0:verify": "tsx e2e/p0-capability-matrix.ts",
+    "smoke:bridge": "tsx e2e/bridge-smoke.mts",
+    "stage:bridge": "tsx scripts/stage-bridge-extension.mts",
     "package:smoke": "tsx scripts/package-smoke.ts",
     "smoke": "tsx e2e/server-smoke.mts",
-    "test:unit": "tsx --test packages/shared/test/unit.test.mts packages/pi-adapter/test/framing.test.mts"
+    "test:unit": "tsx --test packages/shared/test/unit.test.mts packages/pi-adapter/test/framing.test.mts packages/pi-extension/test/*.test.mts scripts/test/*.test.mts"
   },
   "devDependencies": {
     "@types/node": "22.15.3",

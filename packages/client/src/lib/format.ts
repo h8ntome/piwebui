@@ -42,6 +42,23 @@ export function tokens(n: number | null | undefined): string {
   return `${(n / 1_000_000).toFixed(1)}M`;
 }
 
+/** One percent voice for the header trigger, the popover and the session panel (TYPO-03). */
+export function pct(n: number | null | undefined): string {
+  if (n == null || !Number.isFinite(n)) return "—";
+  const v = Math.max(0, n);
+  if (v > 0 && v < 1) return "<1%";
+  return `${v < 10 ? v.toFixed(1) : Math.round(v)}%`;
+}
+
+/** Tool durations: sub-second runs read as `120 ms`, never as a bare `0.0s` (TOOL-06). */
+export function toolDuration(ms: number): string {
+  if (ms < 50) return "";
+  // One unit style for both sides of the second boundary: "460 ms" / "1.1 s", not "460 ms"/"1.1s".
+  if (ms < 1000) return `${Math.round(ms)} ms`;
+  const s = ms / 1000;
+  return `${s < 10 ? s.toFixed(1).replace(/\.0$/, "") : Math.round(s)} s`;
+}
+
 export function duration(ms: number | null | undefined): string {
   if (ms == null) return "";
   if (ms < 1000) return `${Math.round(ms)}ms`;

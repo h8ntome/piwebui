@@ -15,19 +15,23 @@ talks to the one Pi process that already owns the session*, in both directions.
 ## 1. Three topologies, one rule
 
 ```
-                      ┌────────────── browser (React) ──────────────┐
-                      │  REST (commands/control/snapshot) + SSE     │
-                      └───────────────┬─────────────────────────────┘
+                      ┌────────────── browser (React) ───────────────┐
+                      │  REST (commands/control/snapshot) + SSE      │
+                      └───────────────┬──────────────────────────────┘
                                   pi-web server
-                 ┌──────────────────────┼───────────────────────┐
-        read worker (read-only)     StreamHub (SSE)         drivers
-                 │                      │            ┌─────────┴─────────┐
-      session .jsonl files        replay/resync   bridge socket      managed IPC
-                 ▲                                   ▲                 ▲
-                 │                                   │                 │
-        terminal `pi` (TUI)              terminal `pi` (TUI)     pi SDK child
-        NO bridge = mirror only          WITH bridge = live      created in browser
+                 ┌──────────────────────┬────────────────┬───────────────┐
+        read worker (read-only)   StreamHub (SSE)    bridge listener   managed IPC
+                 │                      │           (one unix socket)      ▲
+                 │                      │                 ▲                │
+        session .jsonl files            │      terminal `pi` dials IN  pi SDK child
+        (tail, mirror)                  │      (the bridge extension)   created in browser
+                                        │
+                 terminal `pi` (TUI) — NO bridge = mirror only; WITH bridge = live
 ```
+
+The bridge direction is deliberate: the terminal connects **out** to the server, so there is one
+artifact (the server's own socket + descriptor) instead of one per pi, no stale records to expire,
+and a server that starts later is still found.
 
 | Topology | Who owns the Pi runtime | Session created in | Web can control? |
 | --- | --- | --- | --- |
@@ -216,139 +220,93 @@ unbridged file is not a feature.
 | Exact provider request payload | hooks/routing live deeper | `context` returns a `runtime_preview`, labelled as such |
 | Unvalidated Pi versions | fail-closed pin `TESTED_PI_VERSIONS=["1.5.0"]` | reads keep working, all writes → 423 |
 
-## 10. Why it so often shows "mirror only" anyway
+## 10. How the bridge connects (and why it no longer fails silently)
 
-The mechanism works — adoption is what fails. Evidence and fixes in
-`plan/terminal_live_control_plan.md`; in short:
+The transport was redesigned in the 1.0 cycle; `bridge_plan/` holds the audit and the design,
+`packages/pi-extension/README.md` the user-facing version. In one paragraph: **the terminal dials
+pi-web.** `pi-web serve` publishes `~/.pi-web/bridge.json` (`0600` — socket path + shared token)
+and listens on `bridge-<serverId>.sock`; the extension in each `pi` resolves that descriptor,
+connects, authenticates, and is then *attested* (the claimed `pid` must be a live Pi CLI that
+started when it claims). Identity is pi's `sessionId`, so a session that has no file yet is adopted
+as `live` rather than becoming a pathless placeholder with a mirror twin. The socket belongs to the
+process, not to an extension instance, so `/new`, `/resume`, `/fork` and `/reload` re-bind the live
+`pi`/`ctx` handles without dropping the connection.
 
-1. **`install-bridge` installs a file Pi never loads.** pi 1.5.0 auto-discovers only
-   `~/.pi/agent/extensions/*.ts|*.js`; pi-web copies `pi-web-bridge.mjs`. Renamed to `.js` it loads
-   and registers within about a second of Pi finishing startup. (`pi -e <path>` accepts either name — which is why the manual
-   workaround appears to work.)
-2. **Nothing persists the bridge config.** Without `PIWEB_BRIDGE_TOKEN`/`PIWEB_BRIDGE_DIR` in the
-   Pi process environment the bridge disables itself with a `console.error` you cannot see inside a
-   TUI; the server only accepts records in `<dataDir>/bridges` whose `tokenHash` matches its own
-   token. Any other dir/token — including the `e2e` "PyTUI" pty harness — is invisible.
-3. **Identity is path-based.** A bridged session that has no file yet becomes a pathless
-   `b_<runtimeId>` record while the file scan creates a mirror twin for the same conversation
-   (observed: `mirror,live` listed for one session).
-4. **Session switches break control.** The bridge closes its own endpoint on
-   `session_shutdown{new,resume,fork,reload}`; after `/new` the terminal ends up non-controllable
-   with a stale duplicate in the sidebar.
-5. **Nothing says why.** No diagnostics endpoint, no UI explanation, no event that tells an open tab
-   "a controllable runtime just appeared" (the client refreshes its list only on boot/login/create).
+What each of the historical failure modes became:
 
-Already proven good, so no redesign is needed: **hot handoff without restart** — install the bridge as
-`.js`, type `/reload` at the idle terminal prompt, and the session flips to `live` in ~3.3 s and
-accepts browser prompts. With matching config, attach took 3.1 s and full control (start/steer/
-followUp/rename/abort) worked against the same PID.
+| Was | Now |
+| --- | --- |
+| `install-bridge` copied a `.mjs` pi never loads | `pi install npm:@piwebui/pi-web-bridge` (a real pi package), or `pi-web install-extension`, which copies `.js` and deletes any legacy `.mjs` |
+| token/dir had to be in the pi environment, failure was `console.error` in a TUI | the descriptor file is the handoff; the reason nothing is connected is in `/piweb`, the `● pi-web` footer status, `pi-web doctor` and `/api/v1/bridge/diagnose` |
+| path-first identity, `b_<runtimeId>` placeholders, mirror twins | `sessionId`-first adoption (`bySessionId`), twin merge, path healed when the file appears |
+| endpoint torn down on session replacement | hub singleton: sockets survive, generations bump, the old row retires to `mirror` (readable, never hijacked) and a new live row is adopted |
+| double load (`-e` *and* the package) made two runtimes | `globalThis` singleton on the bridge side, `duplicate_runtime` refusal on the server side |
+| capabilities/sessionFile captured once, then stale forever | `snapshot` answers `capabilities` + `sessionId` + `sessionFile`, and adoption re-applies them |
+| an open tab never learned a session became controllable | `GET /api/v1/events` (`runtimeAttached`, `sessionAppeared`, …) and the client refetches its list by itself |
+| fail-closed version gate with no explanation | still fail-closed, but `compat.detail`, `/api/v1/capabilities`, `doctor` and the sidebar all name `PIWEB_ALLOW_PI_VERSIONS=<version>` |
 
-## 11. Making your terminal session bidirectional today
-
-**The one hard rule:** to join a live terminal Pi mid-session, the bridge must be *inside that Pi
-process*. Stock Pi offers exactly three supported injection points: `pi -e <path>`, the
-`extensions` list in `~/.pi/agent/settings.json`, and auto-discovered
-`~/.pi/agent/extensions/*.js|*.ts`. There is no fourth: a Pi started with none of them can only ever
-be a file mirror (see §2 for why a mirror cannot stream), and there is no supported way to attach to
-an already-running process from outside.
-
-All three recipes below were run and measured (pi 1.5.0, stock pi-web, `--model mock/mock-echo`).
-Every one of them still needs the bridge **token in the pi process environment** — stock pi-web has
-no file fallback for it (`PIWEB_BRIDGE_TOKEN`/`PIWEB_BRIDGE_DIR` only), which is what plan P0 fixes.
+## 11. Using it
 
 ```bash
-# helper: ask the running server what it expects (never hardcode the token)
-piweb_bridge() { piweb print-bridge-command --data-dir ~/.pi-web; }
-# prints e.g.  PIWEB_BRIDGE_TOKEN=… PIWEB_BRIDGE_DIR=…/bridges pi -e …/bridge/extension.mjs
+pi install npm:@piwebui/pi-web-bridge      # once, ever — or: pi-web install-extension
+pi-web                                     # prints the URL, publishes the descriptor
+pi                                         # any project: listed `live` within ~2 s
 ```
 
-### R1 — per-terminal, zero footprint (nothing written to `~/.pi`) · measured: live in 2.9 s
+Nothing else. No `PIWEB_*` variable has to be set in the `pi` process, no `piweb allow` is needed for
+a bridged session (a terminal `pi` you started is your own consent), and a `pi` that was already
+running when you installed the bridge joins by itself at its next `/reload` — or on the retry tick,
+which is also what makes "pi started before pi-web" work (≤ 15 s).
 
-```bash
-pipi() {                     # put this in YOUR shell rc, not in any pi file
-  local line tok dir ext
-  line="$(piweb_bridge)"
-  tok="$(printf '%s' "$line" | tr ' ' '\n' | sed -n 's/^PIWEB_BRIDGE_TOKEN=//p')"
-  dir="$(printf '%s' "$line" | tr ' ' '\n' | sed -n 's/^PIWEB_BRIDGE_DIR=//p')"
-  ext="$(printf '%s' "$line" | sed -n 's/.*-e //p')"
-  PIWEB_BRIDGE_TOKEN="$tok" PIWEB_BRIDGE_DIR="$dir" pi -e "$ext" "$@"
-}
-```
+In the terminal: `● pi-web · 1 viewer · <serverId>` in the footer, and `/piweb` prints the session,
+viewers and dropped-frame counts — or the reason it is not connected. On the server side:
+`pi-web doctor` (also `--json`), `GET /api/v1/runtimes`, `GET /api/v1/bridge/diagnose`.
 
-`pipi` starts a stock Pi that carries the bridge (`-e` accepts the shipped `.mjs` name). Result:
-listed `live` after 2.9 s, `preview=17` frames during a terminal turn, browser prompt `202 accepted`
-and executed by that same PID.
+Optional knobs, all on the bridge side: `PIWEB_BRIDGE_DISABLE=1`, `PIWEB_BRIDGE_FILE`,
+`PIWEB_BRIDGE_MODES`, `PIWEB_BRIDGE_MAX_SERVERS`, `PIWEB_BRIDGE_DEBUG`, and the
+`--no-pi-web-bridge` flag. On the server: `--bridge-mode dial|both|legacy|off`,
+`--bridge-socket`, `--no-attest`, `bridge.allowCwd`, `bridge.autoTrust`,
+`pi-web rotate-bridge-token`, `pi-web trust-runtime|revoke-runtime`.
 
-### R2 — every future terminal Pi auto-carries it · measured: live in 1.8 s
+The pre-1.0 transport (`PIWEB_BRIDGE_DIR` + `PIWEB_BRIDGE_TOKEN`, `<dataDir>/bridges` records, the
+server dialling each pi) still works under `--bridge-mode both` for one release; when both a dial
+connection and a legacy handle appear for the same pi, the dial connection wins and the legacy
+handle is demoted rather than duplicating the session.
 
-```bash
-mkdir -p ~/.pi-web/bridge
-cp "$(piweb_bridge | sed -n 's/.*-e //p')" ~/.pi-web/bridge/pi-web-bridge.js   # .js on purpose
-export PIWEB_BRIDGE_TOKEN="$(piweb_bridge | tr ' ' '\n' | sed -n 's/^PIWEB_BRIDGE_TOKEN=//p')"  # in your rc
-```
+## 12. Security boundary of the bridge
 
-Then add to `~/.pi/agent/settings.json` (configuration, not a code change):
-
-```json
-{ "extensions": ["/home/YOU/.pi-web/bridge/pi-web-bridge.js"] }
-```
-
-Verified with that exact settings entry: new Pi sessions came up `live` in 1.8 s with the extensions
-directory untouched. (A `.mjs` target from `settings.json` was inconclusive in testing; keep the
-`.js` copy.) Serving with `--data-dir ~/.pi-web` also makes `PIWEB_BRIDGE_DIR` unnecessary because
-the bridge default is `~/.pi-web/bridges`.
-
-### R3 — join a Pi that is **already running** with none of the above · measured: joined in 1.5 s
-
-Do R2 (any install point works, including dropping the file into `~/.pi/agent/extensions/`), then
-press **`/reload`** once at the idle terminal prompt. Nothing is lost: the Pi keeps its conversation,
-the bridge loads, and the session flips mirror → live by itself.
-
-```
-before /reload:  modes = history, history        (file mirror only, no control)
-+1.5 s:          mode  = live                   (preview=17 for the next terminal turn)
-browser prompt:  202 accepted, echoed in the terminal
-```
-
-### Web side
-
-```bash
-piweb serve --data-dir ~/.pi-web        # prints a one-use login code
-piweb allow /absolute/path/to/project   # so unbridged sessions of that cwd are listed at all
-```
-
-Open the printed URL, paste the code, pick the session (badge `L` + pid), click to take control.
-
-### Still true on stock builds
-
-* After `/new`, `/resume` or `/fork` the bridge closes its endpoint (§10.4): press `/reload` once, or
-  just start the next session from `pipi`/R2 so the new process carries it from the start.
-* Terminal dialogs are answered in the terminal only (§9).
-* A session whose Pi was started with no injection point at all cannot be joined live — mirror only.
-
-## 12. Security boundary (unchanged by making this easier)
-
-* Unix socket only — the bridge opens **no** network listener; dir `0700`, record and socket `0600`.
-* Every connection must present the shared token (constant-time compare); the record stores only its
-  SHA-256; the server additionally validates `runtimeId`, `pid`, `procStart`, record uid/mode, and
-  that `socketPath` lies inside the registry dir.
-* Extension code runs inside your Pi process with your permissions, so installing the bridge is a
-  consent act and stays an explicit command (`install-bridge`/`uninstall-bridge`, plus a planned
-  `PIWEB_BRIDGE_DISABLE` kill switch and token rotation).
-* Read paths are a separate worker restricted to allowlisted roots; nothing is scanned by default.
-* Commands are validated against versioned schemas before they reach Pi; GETs stay side-effect free.
+* **Unix socket only.** The bridge adds no network listener; the HTTP port, Host allowlist, Origin
+  allowlist, CSRF and CSP are untouched by it.
+* One socket per server (`bridge-<serverId>.sock`, `0600`) inside a `0700` data dir, so two servers
+  on one machine never fight and a stale socket is probed before it is taken over.
+* The shared token lives only in `<dataDir>/bridge.json` (`0600`). It is never printed in the banner,
+  logs, CLI output or an API response — `pi-web print-bridge-command` no longer even shows it.
+* Every connection is gated in order: transport caps → token (constant time, 5 s) → identity →
+  protocol range → **process attestation** → trust list, each rejection recorded with a machine-readable
+  reason and counted in `/api/v1/bridge/diagnose`.
+* Runtimes are recorded and revocable (`pi-web revoke-runtime`, `POST /api/v1/runtimes/:id/revoke`);
+  `bridge.autoTrust=false` makes first contact require an explicit trust.
+* **Same uid is the trust boundary**, and it is stated rather than glossed: Node exposes no
+  `SO_PEERCRED` accessor, so peer uid cannot be verified from JavaScript. Anything running as you that
+  can read `bridge.json` can register a runtime — which is the same set of things that can already type
+  into your terminal. `PIWEB_BRIDGE_DISABLE=1` (or `--bridge-mode off`) turns it off completely.
+* The extension uses only Pi's public extension API: no monkey-patching, no second writer of the
+  session file, no provider calls, no debugger attach, and no answering of another extension's dialog
+  (that limit is reported as 501 instead of simulated).
 
 ## 13. Quick reference
 
 **Routes (all under `/api/v1`, auth required):** `GET /health` · `GET /meta` · `GET /capabilities` ·
-`GET|POST|DELETE /workspaces[/:key]` · `GET|POST /sessions` · `GET /sessions/:key` ·
+`GET /runtimes` · `POST /runtimes/:runtimeId/revoke` · `GET /bridge/diagnose` · `GET /events` (SSE,
+server-wide) · `GET|POST|DELETE /workspaces[/:key]` · `GET|POST /sessions` · `GET /sessions/:key` ·
 `GET /sessions/:key/entries[/:entryId]` · `GET /sessions/:key/tree|context|stats|raw|models|commands`
 · `GET|POST /sessions/:key/control` · `POST /sessions/:key/commands` ·
 `GET /operations/:operationId` · `GET /files` · `GET /sessions/:key/events` (SSE).
 
 **SSE frame names:** `snapshot, entry, preview, runtimeState, toolState, queueState, dialogRequest,
 dialogResolved, operationState, controlState, ownerChanged, conflict, resync, heartbeat, hostExited,
-streamEnd, unknown`.
+streamEnd` — plus the machine-wide stream's `runtimeAttached, runtimeGone, sessionAppeared,
+sessionRetired, bridgeDisabled`.
 
 **Error → HTTP:** `invalid_request 400 · unauthorized 401 · forbidden 403 · not_found 404 ·
 busy/owner_conflict/idempotency_conflict 409 · cursor_expired 410 · stale_control 412 ·
@@ -357,7 +315,8 @@ pi_command_failed 502 · host_unavailable 503 · timeout 504`.
 
 **Tunables:** `CONTROL_TTL_MS 30s` · `CONTROL_RENEW_MS 10s (unused)` · `DISPATCH_ACK_TIMEOUT_MS 10s`
 · `HEALTH_PING_MS 5s` / `HEALTH_MAX_MISSES 3` · `MAX_MANAGED_RUNTIMES 4` ·
-`SETTLED_HOST_CLEANUP_MS 60s` · `MAX_FILE_MIRROR_VIEWS 8` · bridge discovery sweep `3s`.
+`SETTLED_HOST_CLEANUP_MS 60s` · `MAX_FILE_MIRROR_VIEWS 8` · bridge replay `2000 frames / 4 MiB` ·
+bridge auth deadline `5s` · bridge conns `32`.
 
 ### Sequences
 

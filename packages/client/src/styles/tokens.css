@@ -740,3 +740,30 @@ body[data-ds-dark-theme] {
   --shiki-token-punctuation:#ced4da;
   --shiki-token-link:#74c0fc
 }
+
+/* ---------------------------------------------------------------------------
+   pi-web app tokens (not part of the ported reference sheet).
+   --------------------------------------------------------------------------- */
+:root {
+  /* One documented layer scale for everything that leaves the frame (ZIDX-01). */
+  --pw-z-scrim: 1000;
+  --pw-z-dialog: 1010;
+  --pw-z-menu: 1020;
+  --pw-z-tooltip: 1030;
+  --pw-z-toast: 1040;
+  --pw-scrim: #00000066;
+}
+/* The label aliases live on `body`, so the derived token has to be declared there too —
+   a :root declaration would resolve to nothing and silently fall back to primary text. */
+body {
+  /* AA-safe "secondary information" text: the reference tertiary label is a mid grey that
+     fails contrast at 10-13px in the light theme (A11Y-01 / DARK-01). */
+  --pw-label-meta: var(--dsw-alias-label-secondary);
+}
+body[data-ds-dark-theme] {
+  /* Dark dialogs need separation the light wash cannot provide (ZIDX-02 / DARK-03). */
+  --pw-label-meta: var(--dsw-alias-label-secondary);
+  --pw-scrim: #000000b3;
+  --dsw-elevation-prominent: 0 0 0 .5px var(--dsw-alias-border-l3), 0 18px 48px 0 #000000cc;
+  --dsw-elevation-panel: 0 0 0 .5px var(--dsw-alias-border-l3), 0 8px 28px 0 #000000a6;
+}

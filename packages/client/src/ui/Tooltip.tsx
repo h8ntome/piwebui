@@ -4,6 +4,10 @@ import { Portal } from "./Portal";
 
 interface Place { top: number; left: number; side: "top" | "bottom"; }
 
+/** How much room a bubble needs above/below the anchor before it would be clipped. */
+const TIP_H = 30;
+const EDGE = 6;
+
 export function Tip({ label, side = "top", style, className, children }: {
   label: ReactNode; side?: "top" | "bottom"; style?: CSSProperties; className?: string; children: ReactNode;
 }) {
@@ -17,7 +21,17 @@ export function Tip({ label, side = "top", style, className, children }: {
       const el = anchor.current;
       if (!el) return;
       const r = el.getBoundingClientRect();
-      setPlace({ top: side === "top" ? r.top - 6 : r.bottom + 6, left: r.left + r.width / 2, side });
+      // Header icons sit at the very top of the window: a "top" tooltip there used to land at
+      // y = -21, i.e. completely off-screen. Flip to whichever side has room (SET-04).
+      const fitsAbove = r.top - EDGE >= TIP_H;
+      const fitsBelow = window.innerHeight - r.bottom - EDGE >= TIP_H;
+      const flipped = side === "top" && !fitsAbove && fitsBelow;
+      const chosen: "top" | "bottom" = flipped ? "bottom" : (side === "bottom" && !fitsBelow && fitsAbove ? "top" : side);
+      setPlace({
+        top: chosen === "top" ? r.top - 6 : r.bottom + 6,
+        left: Math.min(Math.max(r.left + r.width / 2, 60), window.innerWidth - 60),
+        side: chosen,
+      });
     }, 350);
   }, [side]);
 
@@ -39,7 +53,7 @@ export function Tip({ label, side = "top", style, className, children }: {
     >
       {children}
       {place && (
-        <Portal>
+        <Portal layer="tooltip">
           <span
             className="pw-tooltip"
             role="tooltip"

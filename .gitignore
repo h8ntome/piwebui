@@ -4,6 +4,9 @@ data/
 *.log
 .DS_Store
 .env
+
+# local token/env files, never commit
+env_tokens/
 packages/client/dist/
 *.tsbuildinfo
 

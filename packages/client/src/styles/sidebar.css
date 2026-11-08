@@ -265,3 +265,52 @@
 .pw-side--collapsed .pw-projectRow { width: 36px; justify-content: center; padding: 0; }
 .pw-side--collapsed .pw-projectRow .pw-row__title, .pw-side--collapsed .pw-projectRow .pw-row__actions { display: none; }
 .pw-side--collapsed .pw-sessionRow { display: none; }
+
+/* ---------------------------------------------------------------------------
+   Audit refinements: rows are real buttons, mode is visible, and controls are
+   reachable without hover (SB-*, A11Y-03).
+   --------------------------------------------------------------------------- */
+
+/* A row is a container now: the open action is a real button and the row actions are its
+   siblings, instead of buttons nested inside a div[role=button] (A11Y-02). */
+.pw-sessionRow { position: relative; height: 32px; }
+.pw-sessionRow__main {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 0;
+  background: none; border: none; color: inherit; font: inherit; text-align: left;
+  cursor: pointer; padding: 0; height: 100%;
+}
+.pw-projectRow__main {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: var(--pw-sidebar-label-gap);
+  background: none; border: none; color: inherit; font: inherit; text-align: left;
+  cursor: pointer; padding: 0; height: 100%;
+}
+.pw-sessionRow__main:focus-visible, .pw-projectRow__main:focus-visible {
+  outline: 2px solid var(--dsw-alias-link); outline-offset: -2px; border-radius: var(--dsw-radius-md);
+}
+/* Controllable vs read-only, visible without opening the session (SB-01). */
+.pw-modeGlyph { color: var(--pw-label-meta); display: inline-flex; opacity: .9; }
+.pw-sessionRow--selected .pw-modeGlyph { color: var(--dsw-static-deepseek-500); }
+.pw-row__count { flex: none; font-size: 11px; color: var(--pw-label-meta); font-variant-numeric: tabular-nums; margin-right: 4px; }
+.pw-groupEmpty {
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 4px 8px 6px calc(var(--pw-sidebar-row-padding) + 22px);
+  font-size: 12px; color: var(--pw-label-meta);
+}
+.pw-sessions__searchHint { flex: none; font-size: 10px; color: var(--pw-label-meta); border: var(--pw-hairline,.5px) solid var(--dsw-alias-border-l2); border-radius: 4px; padding: 0 3px; margin-right: 2px; }
+.pw-mark { background: color-mix(in srgb, var(--dsw-static-amber-400) 40%, transparent); color: inherit; border-radius: 2px; }
+
+/* Contrast: the sidebar's small labels used the reference tertiary grey (A11Y-01). */
+.pw-sessions__label, .pw-row__time { color: var(--pw-label-meta); }
+.pw-row__time { font-size: 11px; }
+
+/* Row actions must be reachable by keyboard and by touch, not only by hover (SB-07 / A11Y-03). */
+.pw-projectRow:focus-within .pw-row__actions, .pw-sessionRow:focus-within .pw-row__actions { display: inline-flex; }
+html[data-input-modality="touch"] .pw-row__actions,
+.pw-frame[data-phone] .pw-row__actions { display: inline-flex; }
+
+/* Touch targets: 40px hit areas on phones (MOB-03). */
+.pw-frame[data-phone] .pw-sessionRow { height: 40px; }
+.pw-frame[data-phone] .pw-projectRow { height: 40px; }
+.pw-frame[data-phone] .pw-row__actions .pw-iconBtn,
+.pw-frame[data-phone] .pw-sessions__actions .pw-iconBtn { width: 34px; height: 34px; }
+.pw-frame[data-phone] .pw-nav__row { min-height: 40px; }

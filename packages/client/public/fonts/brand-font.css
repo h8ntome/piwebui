@@ -1,8 +1,12 @@
-/* Montserrat; SIL Open Font License in Montserrat-OFL.txt. */
+/* Montserrat; SIL Open Font License in Montserrat-OFL.txt.
+   Weight ranges (not single weights) are deliberate: the stylesheets ask for 600 and 700 in
+   a dozen places, but only three weights exist here. Declaring 500 to 900 as the medium face
+   means those headings use a real design instead of a browser-synthesised faux bold (TYPO-01),
+   without shipping another 120 KB of font files to a bundle that is already 550 KB. */
 @font-face {
   font-family: 'Montserrat';
   font-style: normal;
-  font-weight: 400;
+  font-weight: 400 499;
   font-display: swap;
   src: url(/fonts/montserrat-regular.woff2) format('woff2');
 }
@@ -10,7 +14,7 @@
 @font-face {
   font-family: 'Montserrat';
   font-style: normal;
-  font-weight: 300;
+  font-weight: 300 399;
   font-display: swap;
   src: url(/fonts/montserrat-light.woff2) format('woff2');
 }
@@ -18,7 +22,7 @@
 @font-face {
   font-family: 'Montserrat';
   font-style: normal;
-  font-weight: 500;
+  font-weight: 500 900;
   font-display: swap;
   src: url(/fonts/montserrat-medium.woff2) format('woff2');
 }

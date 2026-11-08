@@ -1,6 +1,13 @@
 # Terminal-session live control: investigation and implementation plan
 
 Status: proposal for approval · Date: 2026-11-07 · Author: pi (research pass)
+
+> **Superseded on the transport question (2026-11-08).** `bridge_plan/` replaced this plan's
+> registry/env transport (its D1 analogue) with "the terminal dials the server" + a published
+> descriptor, and `--bridge-mode`. What this document still gets right, and what shipped: the
+> identity work (D2 → pi `sessionId`), presence (D5 → the server-wide stream + `doctor`), and
+> honesty (D6 → `/piweb`, per-session "why mirror"). Its P6 (promote a session whose terminal is
+> gone) remains out of scope. See `bridge_plan/README.md` for the decision table.
 Target: remove the "mirror only" restriction for sessions started in a terminal Pi (the TUI,
 including the `e2e/lib/ptyrun.py` "PyTUI" harness), so the browser sees live thinking/tool
 streaming and can submit prompts, steer, abort and reconfigure that same runtime.

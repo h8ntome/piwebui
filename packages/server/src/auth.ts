@@ -7,6 +7,9 @@ import { Store } from "./store.ts";
 
 export interface TlsConfig { certFile: string; keyFile: string; }
 
+/** How the terminal bridge is wired (03 §2, 02 §7). */
+export type BridgeModeName = "dial" | "legacy" | "both" | "off";
+
 export interface Config {
   bind: string;
   port: number;
@@ -21,6 +24,19 @@ export interface Config {
   maxManaged: number;
   sessionRootsExtra: string[];
   logLevel: "info" | "warn" | "error";
+  /** Terminal-bridge behaviour (03 §2–§3). Everything here defaults to "zero config works". */
+  bridge?: {
+    /** `dial` (default) | `legacy` | `both` | `off`. */
+    mode?: BridgeModeName | undefined;
+    /** Verify a bridge's claimed pid really is a live pi started when it claims (D-6). */
+    requireAttestation?: boolean | undefined;
+    /** Trust an unseen same-uid runtime on first sight; false = `pi-web trust-runtime` first. */
+    autoTrust?: boolean | undefined;
+    /** Admit session directories announced by attested bridges so they can be paged (03 §4). */
+    trustSessionDirs?: boolean | undefined;
+    /** Optional belt: only adopt bridges whose cwd sits under one of these prefixes. */
+    allowCwd?: string[] | undefined;
+  };
 }
 
 export function defaultDataDir(): string {
@@ -50,6 +66,13 @@ function stripUndefined(o: object): Record<string, unknown> {
 }
 
 function structured(c: Record<string, unknown>): Config {
+  const fileBridge = (c.bridge ?? {}) as {
+    mode?: BridgeModeName;
+    requireAttestation?: boolean;
+    autoTrust?: boolean;
+    trustSessionDirs?: boolean;
+    allowCwd?: string[];
+  };
   const bind = (c.bind as string) ?? DEFAULT_BIND;
   const port = (c.port as number) ?? DEFAULT_PORT;
   const hosts = new Set<string>([
@@ -72,6 +95,13 @@ function structured(c: Record<string, unknown>): Config {
     maxManaged: (c.maxManaged as number) ?? 4,
     sessionRootsExtra: (c.sessionRootsExtra as string[]) ?? [],
     logLevel: (c.logLevel as Config["logLevel"]) ?? "info",
+    bridge: {
+      mode: fileBridge.mode ?? (process.env.PIWEB_BRIDGE_MODE as BridgeModeName | undefined),
+      requireAttestation: process.env.PIWEB_BRIDGE_ATTEST !== "0" && fileBridge.requireAttestation !== false,
+      autoTrust: process.env.PIWEB_BRIDGE_AUTO_TRUST !== "0" && fileBridge.autoTrust !== false,
+      trustSessionDirs: fileBridge.trustSessionDirs !== false && process.env.PIWEB_BRIDGE_TRUST_SESSION_DIRS !== "0",
+      allowCwd: fileBridge.allowCwd ?? (process.env.PIWEB_BRIDGE_ALLOW_CWD ? process.env.PIWEB_BRIDGE_ALLOW_CWD.split(",").map((s) => s.trim()).filter(Boolean) : undefined),
+    },
   };
 }
 
@@ -104,6 +134,16 @@ export class AuthService {
   bridgeToken(): string {
     let t = this.store.kvGet("bridge_token");
     if (!t) { t = randomSecret(24); this.store.kvSet("bridge_token", t); }
+    return t;
+  }
+
+  /**
+   * Rotation is deliberate and rare: every live bridge is dropped and reconnects with the new
+   * secret within its retry window. The token is never returned to a caller that prints it.
+   */
+  rotateBridgeToken(): string {
+    const t = randomSecret(24);
+    this.store.kvSet("bridge_token", t);
     return t;
   }
 

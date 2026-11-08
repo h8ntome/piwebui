@@ -9,10 +9,14 @@ import {
   CommandEnvelopeSchema,
   ControlActionSchema,
   CreateSessionSchema,
+  ENTRIES_PAGE_DEFAULT,
+  ENTRIES_PAGE_MAX,
   EntriesQuerySchema,
   FilesQuerySchema,
   ListSessionsQuerySchema,
   RawQuerySchema,
+  SESSIONS_PAGE_MAX,
+  SNAPSHOT_ENTRY_PAGE,
   validate, validateQuery,
   newOpaqueId,
   type Capabilities,
@@ -36,6 +40,10 @@ import { ApiError, shellEscape, type CommandDispatcher } from "./commands.ts";
 import { discoverThemes } from "./themes.ts";
 import { viewFile, browseDir } from "./files.ts";
 import type { BridgeDiscovery } from "./drivers.ts";
+import type { BridgeServer } from "./bridgeServer.ts";
+import type { BridgeWire } from "./bridgeWire.ts";
+import { descriptorPath, readDescriptor, writeDescriptor } from "./descriptor.ts";
+import { GLOBAL_STREAM_KEY } from "./sessions.ts";
 import { encodeFrame } from "./hub.ts";
 import { logWarn } from "./log.ts";
 
@@ -49,7 +57,13 @@ export interface AppCtx {
   control: ControlGrants;
   ops: Operations;
   dispatcher: CommandDispatcher;
-  bridges: BridgeDiscovery;
+  /** The dial listener (terminal pis connect to it). */
+  bridge: BridgeServer;
+  /** Adoption wiring behind that listener. */
+  wire: BridgeWire;
+  /** Pre-1.0 discovery (the server dials each terminal pi); empty unless mode is legacy/both. */
+  legacyBridges: BridgeDiscovery;
+  bridgeMode: string;
   piPkg: { version: string | null; path: string | null };
   serverId: string;
   startedAt: number;
@@ -108,23 +122,136 @@ export function registerRoutes(app: FastifyInstance, ctx: AppCtx) {
   /* ---------------- meta ---------------- */
   app.get("/api/v1/health", async (req) => {
     principal(req);
+    const desc = readDescriptor(descriptorPath(cfg.dataDir));
     return {
       ok: true,
       version: ctx.manifest.version,
       uptimeMs: Date.now() - ctx.startedAt,
       serverId: ctx.serverId,
-      pi: { resolvedVersion: ctx.piPkg.version, path: ctx.piPkg.path ? "resolved" : null, tested: !!ctx.piPkg.version },
+      pi: { resolvedVersion: ctx.piPkg.version, path: ctx.piPkg.path ? "resolved" : null, tested: !!ctx.piPkg.version && isPiVersionAllowed(ctx.piPkg.version) },
       managed: { active: sessions.managedCount(), limit: cfg.maxManaged },
-      bridges: ctx.bridges.handlesSnapshot().length,
+      bridges: {
+        dial: ctx.wire.counts().dial,
+        legacy: ctx.legacyBridges.handlesSnapshot().length,
+        listener: bridgeListenerState(ctx),
+        descriptorAgeMs: desc.ok ? Date.now() - Math.floor(new Date(desc.descriptor.updatedAt ?? 0).getTime() || 0) : null,
+      },
       mirrors: [...sessions.byKey.values()].filter((r) => !r.driver && r.file.exists).length,
     };
+  });
+
+  /* ---------------- bridge diagnostics (D-8: say why) ---------------- */
+
+  app.get("/api/v1/runtimes", async (req) => {
+    principal(req);
+    const managed = [...sessions.byKey.values()]
+      .filter((rec) => rec.kind === "managed" && rec.driver)
+      .map((rec) => ({
+        runtimeId: rec.driver!.runtimeId,
+        transport: "managed" as const,
+        serverId: ctx.serverId,
+        pid: rec.driver!.pid,
+        procStart: 0,
+        piVersion: rec.driver!.piVersion,
+        piMode: "sdk",
+        protocol: 1,
+        adapterVersion: ctx.manifest.version,
+        cwd: rec.driver!.cwd,
+        runtimeGeneration: rec.driver!.generation,
+        sessionGeneration: rec.sessionGeneration,
+        lastSeq: 0,
+        sessions: [{ key: rec.key, piSessionId: rec.meta.piSessionId, mode: sessions.mode(rec) }],
+        capabilities: rec.driver!.capabilities,
+        lastError: null,
+        dropped: { previews: 0, tools: 0, throttled: 0 },
+        attested: true,
+        trusted: true,
+        connectedAt: rec.createdAt,
+      }));
+    return { serverId: ctx.serverId, mode: ctx.bridgeMode, runtimes: [...ctx.wire.runtimes(), ...managed] };
+  });
+
+  app.post("/api/v1/runtimes/:runtimeId/revoke", async (req) => {
+    principal(req);
+    const { runtimeId } = req.params as { runtimeId: string };
+    const dropped = ctx.bridge.revoke(runtimeId);
+    if (!dropped) ctx.store.runtimeSetTrusted(runtimeId, false);
+    return { ok: true, runtimeId, wasConnected: dropped, trusted: false };
+  });
+
+  app.delete("/api/v1/runtimes/:runtimeId", async (req) => {
+    principal(req);
+    const { runtimeId } = req.params as { runtimeId: string };
+    ctx.bridge.revoke(runtimeId);
+    const forgot = ctx.store.runtimeSetTrusted(runtimeId, false);
+    return { ok: true, runtimeId, forgotten: forgot };
+  });
+
+  app.get("/api/v1/bridge/diagnose", async (req) => {
+    principal(req);
+    const d = ctx.wire.diagnose();
+    const file = descriptorPath(cfg.dataDir);
+    const desc = readDescriptor(file);
+    let ageMs: number | null = null;
+    try { ageMs = Date.now() - fs.statSync(file).mtimeMs; } catch { ageMs = null; }
+    return {
+      ...d,
+      mode: ctx.bridgeMode,
+      listener: bridgeListenerState(ctx),
+      descriptor: desc.ok ? redactDescriptor(desc.descriptor) : { error: desc.reason, path: desc.path },
+      descriptorAgeMs: ageMs,
+      tokenPresent: desc.ok,
+      attestationRequired: cfg.bridge?.requireAttestation !== false,
+    };
+  });
+
+  app.post("/api/v1/bridge/rotate-token", async (req) => {
+    principal(req);
+    const next = auth.rotateBridgeToken();
+    const file = descriptorPath(cfg.dataDir);
+    const current = readDescriptor(file);
+    writeDescriptor({
+      dataDir: cfg.dataDir,
+      serverId: ctx.serverId,
+      socket: ctx.bridge.socketPath,
+      token: next,
+      http: current.ok ? current.descriptor.http : `${cfg.tls ? "https" : "http"}://${cfg.bind}:${cfg.port}`,
+      piwebVersion: ctx.manifest.version,
+    });
+    // Live bridges keep the old secret, so they are told to re-read and then dropped: the bridge
+    // rescans its descriptor on `reauth_required` and reconnects inside its retry window.
+    ctx.bridge.broadcastControl("reauth_required", { reason: "token_rotated" });
+    setTimeout(() => { for (const c of ctx.bridge.connections()) c.die("revoked"); }, 5000).unref?.();
+    return { rotated: true, descriptor: file, note: "bridges reconnect within <= 15 s; sessions in flight are untouched" };
+  });
+
+  /** Server-wide stream: "a terminal just became controllable" (fixes E15). */
+  app.get("/api/v1/events", (req, reply) => {
+    principal(req);
+    reply.hijack();
+    const raw = reply.raw;
+    raw.writeHead(200, {
+      "content-type": "text/event-stream; charset=utf-8",
+      "cache-control": "no-store, no-transform",
+      "x-accel-buffering": "no",
+      connection: "keep-alive",
+    });
+    raw.flushHeaders?.();
+    const stream = hub.getStream(GLOBAL_STREAM_KEY);
+    const write = (frame: string) => { try { raw.write(frame); } catch { /* closed */ } };
+    const sub = hub.subscribe(GLOBAL_STREAM_KEY, write, () => { /* the global stream has no snapshot to resync from */ });
+    hub.getStream(GLOBAL_STREAM_KEY).goLive(sub);
+    void stream;
+    req.raw.on("close", () => { hub.getStream(GLOBAL_STREAM_KEY).unsubscribe(sub); });
   });
 
   app.get("/api/v1/meta", async (req) => {
     principal(req);
     const meta: MetaInfo = {
       limits: {
-        maxRequestBytes: 8 * 1024 * 1024, entriesPageMax: 1000, sseMaxFrames: 5000, sseMaxBytes: 8 * 1024 * 1024,
+        maxRequestBytes: 8 * 1024 * 1024, entriesPageMax: ENTRIES_PAGE_MAX, entriesPageDefault: ENTRIES_PAGE_DEFAULT,
+        snapshotEntries: SNAPSHOT_ENTRY_PAGE, sessionsPageMax: SESSIONS_PAGE_MAX,
+        sseMaxFrames: 5000, sseMaxBytes: 8 * 1024 * 1024,
         sseHeartbeatMs: 15000, sseClientSilenceMs: 45000, controlTtlMs: 30000, maxManagedRuntimes: cfg.maxManaged,
       },
       auth: { cookie: "piweb_session", csrfHeader: "x-piweb-csrf" },
@@ -135,10 +262,11 @@ export function registerRoutes(app: FastifyInstance, ctx: AppCtx) {
 
   app.get("/api/v1/capabilities", async (req) => {
     principal(req);
-    const tested = !!ctx.piPkg.version && ["1.5.0"].includes(ctx.piPkg.version);
+    const tested = !!ctx.piPkg.version && isPiVersionAllowed(ctx.piPkg.version);
     return {
-      server: ["rest-v1", "sse-v1", "managed-sessions", "bridge-control", "file-mirror"],
-      pi: { version: ctx.piPkg.version, tested },
+      server: ["rest-v1", "sse-v1", "managed-sessions", "bridge-control", "file-mirror", "bridge-dial", "global-events"],
+      pi: { version: ctx.piPkg.version, tested, validated: [...TESTED_PI_VERSIONS], allowedByConfig: allowedPiVersions() },
+      bridge: { mode: ctx.bridgeMode, dial: ctx.wire.counts().dial, legacy: ctx.legacyBridges.handlesSnapshot().length },
       drivers: {
         bridge: tested ? bridgeCaps() : "disabled-untested",
         managed: tested ? managedCaps() : "disabled-untested",
@@ -157,6 +285,9 @@ export function registerRoutes(app: FastifyInstance, ctx: AppCtx) {
   /* ---------------- workspaces ---------------- */
   app.get("/api/v1/workspaces", async (req) => {
     principal(req);
+    // `pi-web allow <dir>` runs in another process against the same SQLite file: re-read the
+    // table so a running server picks the allowlist up without a restart.
+    sessions.reloadWorkspaces();
     return { workspaces: [...sessions.workspaces.values()] };
   });
   app.post("/api/v1/workspaces", async (req) => {
@@ -180,6 +311,7 @@ export function registerRoutes(app: FastifyInstance, ctx: AppCtx) {
   /* ---------------- sessions ---------------- */
   app.get("/api/v1/sessions", async (req) => {
     principal(req);
+    sessions.reloadWorkspaces();
     const q = query<{ workspaceKey?: string; q?: string; limit?: number; cursor?: string }>(req, ListSessionsQuerySchema);
     await ctx.read.ensure(sessions.sessionRoots());
     let summaries = await ctx.read.call<{ meta: SessionMeta; diagnostics: number }[]>("list", {});
@@ -237,12 +369,17 @@ export function registerRoutes(app: FastifyInstance, ctx: AppCtx) {
   app.get("/api/v1/sessions/:key/entries", async (req) => {
     principal(req);
     const rec = recByKey(ctx, (req.params as { key: string }).key);
-    const q = query<{ cursor?: string; limit?: number; branch?: string }>(req, EntriesQuerySchema);
+    const q = query<{ cursor?: string; limit?: number; branch?: string; before?: string }>(req, EntriesQuerySchema);
     if (!rec.path) throw new ApiError("not_found", "no persisted file for this session yet");
     if (rec.workspaceKey === null && !rec.driver) throw new ApiError("forbidden", "session outside allowlisted roots");
     await ctx.read.ensure(sessions.sessionRoots());
     try {
-      const page = await ctx.read.call<EntryPage & { nextCursor: string | null }>("page", { file: rec.path, cursor: q.cursor ?? null, limit: q.limit ?? 200 });
+      if (q.before != null) {
+        return await ctx.read.call<EntryPage & { nextCursor: string | null; olderCursor?: string | null }>("pageBefore", {
+          file: rec.path, before: q.before, limit: q.limit ?? ENTRIES_PAGE_DEFAULT,
+        });
+      }
+      const page = await ctx.read.call<EntryPage & { nextCursor: string | null }>("page", { file: rec.path, cursor: q.cursor ?? null, limit: q.limit ?? ENTRIES_PAGE_DEFAULT });
       return page;
     } catch (e) {
       if ((e as { code?: string }).code === "cursor_expired") throw new ApiError("cursor_expired", "page cursor expired; refetch from a fresh snapshot");
@@ -459,6 +596,16 @@ export function registerRoutes(app: FastifyInstance, ctx: AppCtx) {
     void sendSnapshot();
     req.raw.on("close", () => { hub.getStream(rec.key).unsubscribe(sub); });
   });
+}
+
+/* ---------------- bridge helpers ---------------- */
+import fs from "node:fs";
+import { TESTED_PI_VERSIONS, allowedPiVersions, isPiVersionAllowed, redactDescriptor } from "@piwebui/shared";
+
+function bridgeListenerState(ctx: AppCtx): string {
+  if (ctx.bridgeMode === "off") return "disabled";
+  const s = ctx.bridge.statsSnapshot(null, ctx.legacyBridges.handlesSnapshot().length);
+  return s.listener === "ok" ? "ok" : String(s.listener);
 }
 
 /* ---------------- managed session creation ---------------- */

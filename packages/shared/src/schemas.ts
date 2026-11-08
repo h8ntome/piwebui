@@ -106,6 +106,8 @@ export const EntriesQuerySchema = Type.Object({
   cursor: Type.Optional(Type.String({ maxLength: 512 })),
   limit: Type.Optional(Type.Number({ minimum: 1, maximum: ENTRIES_PAGE_MAX })),
   branch: Type.Optional(Type.Union([Type.Literal("active"), Type.Literal("all")])),
+  /** Entry id you already hold the page from: hand back the page before it. */
+  before: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
 });
 
 export const FilesQuerySchema = Type.Object({

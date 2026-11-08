@@ -12,5 +12,19 @@ export default defineConfig({
       },
     },
   },
-  build: { outDir: "dist", sourcemap: false },
+  build: {
+    outDir: "dist",
+    sourcemap: false,
+    rollupOptions: {
+      output: {
+        // Split the heavy libraries out of the single 550 KB bundle: the shell can boot and
+        // paint while the markdown/highlight stack arrives as its own cached chunk (PERF-02).
+        // highlight.js itself is loaded from lib/md.ts with a dynamic import on first use.
+        manualChunks: {
+          react: ["react", "react-dom"],
+          markdown: ["marked", "dompurify"],
+        },
+      },
+    },
+  },
 });

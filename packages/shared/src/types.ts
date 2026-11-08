@@ -185,6 +185,10 @@ export interface EntryPage {
   fileGeneration: string;
   entries: EntryView[];
   nextCursor: string | null;
+  /** Set by backwards paging (`?before=`): cursor for the page older than this one. */
+  olderCursor?: string | null;
+  /** Lines that failed to parse on this pass (bounded to the first few). */
+  diagnostics?: { message: string; byteOffset: number }[];
   leafEntryId: string | null;
   entryCount: number;
   totalBytes: number;
@@ -362,6 +366,11 @@ export type StreamEventName =
   | "heartbeat"
   | "hostExited"
   | "streamEnd"
+  | "runtimeAttached"
+  | "runtimeGone"
+  | "sessionAppeared"
+  | "sessionRetired"
+  | "bridgeDisabled"
   | "unknown";
 
 export interface StreamEnvelope<P = unknown> {
@@ -405,6 +414,10 @@ export interface SnapshotPayload {
   entries: EntryView[];
   nextEntriesCursor: string | null;
   entryTotal: number;
+  /** True when the session holds entries older than this newest-first window. */
+  olderAvailable?: boolean;
+  /** Lines of the session file that could not be parsed (bounded, user-visible). */
+  diagnostics?: { message: string; byteOffset: number }[];
   runtimeState: RuntimeStatePayload | null;
   pendingDialogs: DialogRequest[];
   observedDialogs: DialogRequest[];
@@ -429,6 +442,12 @@ export interface MetaInfo {
   limits: {
     maxRequestBytes: number;
     entriesPageMax: number;
+    /** Page size the transcript snapshot and a plain `GET /entries` actually use. */
+    entriesPageDefault: number;
+    /** Entries handed back by the SSE snapshot (newest-first window). */
+    snapshotEntries: number;
+    /** Largest page for `GET /sessions`. */
+    sessionsPageMax: number;
     sseMaxFrames: number;
     sseMaxBytes: number;
     sseHeartbeatMs: number;

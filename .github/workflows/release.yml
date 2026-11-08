@@ -16,7 +16,11 @@ name: release
 #
 # Canary versions are stamped inside the job only — nothing is committed back, so main's
 # manifests stay at the last released version and canaries never collide with a future
-# stable release. The three manifests must carry the same version either way.
+# stable release. Every publishable manifest must carry the same version either way.
+#
+# Which packages: `node scripts/publish-list.mts` (every non-private workspace, in
+# dependency order). Nothing in this file names a package, so a package added to the
+# workspace is published automatically instead of being silently skipped here.
 #
 # Auth: npm Trusted Publishing (OIDC) via `--provenance`, so no npm token is stored
 # in repository secrets. npm cannot create a trusted-publisher config for a package
@@ -26,7 +30,10 @@ name: release
 #
 # A brand-new package under OIDC-only auth fails with a misleading `EOTP` (provenance is
 # signed to the transparency log first, then the publish is refused). The Preflight step
-# below detects that state up front and says so instead.
+# below detects that state up front and says so instead. Once it exists, the publisher can
+# be registered without the website: `npm trust github <pkg> --repo h8ntome/piwebui
+# --file release.yml --allow-publish` (npm >= 11.15, and a login or a granular token that
+# does NOT bypass 2FA — bypass tokens are rejected by the trust API with 403).
 #
 # Escape hatch: a repo secret `NPM_TOKEN` (granular token) switches this workflow to
 # token publishing — no provenance, and it can create new packages, which makes it the
@@ -66,15 +73,21 @@ jobs:
       - name: Install pi at the validated version (the packaging gate boots the real server)
         run: npm install -g @earendil-works/pi-coding-agent@1.5.0
 
+      - name: Resolve what gets published
+        id: pkgs
+        # One source of truth for the package list; every loop below reads it, so adding a
+        # package to the workspace cannot miss a step in this workflow.
+        run: node scripts/publish-list.mts --gh >> "$GITHUB_OUTPUT"
+
       - name: Resolve release kind
         id: kind
         run: |
           set -euo pipefail
           base=$(node -p "require('./packages/shared/package.json').version")
-          for p in pi-adapter server; do
+          for p in ${{ steps.pkgs.outputs.dirs }}; do
             v=$(node -p "require('./packages/$p/package.json').version")
             if [ "$v" != "$base" ]; then
-              echo "::error::packages/$p is $v but packages/shared is $base; all three must match."
+              echo "::error::packages/$p is $v but the release base is $base; every publishable manifest must match."
               exit 1
             fi
           done
@@ -99,7 +112,7 @@ jobs:
         run: |
           set -euo pipefail
           tag="${GITHUB_REF_NAME#v}"
-          for p in shared pi-adapter server; do
+          for p in ${{ steps.pkgs.outputs.dirs }}; do
             v=$(node -p "require('./packages/$p/package.json').version")
             if [ "$v" != "$tag" ]; then
               echo "::error::tag v$tag does not match packages/$p/package.json version $v" >&2
@@ -136,7 +149,7 @@ jobs:
         run: |
           set -euo pipefail
           missing=0
-          for p in shared pi-adapter server; do
+          for p in ${{ steps.pkgs.outputs.dirs }}; do
             name=$(node -p "require('./packages/$p/package.json').name")
             if v=$(npm view "$name" version 2>/dev/null) && [ -n "$v" ]; then
               echo "$name exists on npm at $v"
@@ -146,7 +159,7 @@ jobs:
             fi
           done
           if [ "$missing" = 1 ] && [ "${{ steps.auth.outputs.mode }}" = oidc ]; then
-            echo "::error::A package here has never been published and npm cannot create one via trusted publishing (the trusted-publisher setting only exists on a package that already exists). One-time bootstrap: npm run build, then npm publish -w ./packages/<p> --access public from a logged-in CLI (no --provenance locally); then register the trusted publisher (repo h8ntome/piwebui, workflow release.yml) on each package's npm Settings page, or set the NPM_TOKEN secret and re-run. See MAINTAINERS.md."
+            echo "::error::A package here has never been published and npm cannot create one via trusted publishing (the trusted-publisher setting only exists on a package that already exists). One-time bootstrap: npm run build, then npm publish -w ./packages/<p> --access public from a logged-in CLI (no --provenance locally); then register the publisher with 'npm trust github <name> --repo h8ntome/piwebui --file release.yml --allow-publish' (or the package's npm Settings page), or set the NPM_TOKEN secret and re-run. See MAINTAINERS.md."
             exit 1
           fi
 
@@ -158,31 +171,47 @@ jobs:
           npm run package:smoke
 
       - name: Publish (in dependency order)
+        id: publish
         # OIDC path uses --provenance and the id-token permission; the token path was
         # already written into ~/.npmrc and must not ask for provenance it cannot sign.
         # A rejected publish shows up as 404-on-PUT, never 403, so translate it here.
+        #
+        # Exactly one refusal is tolerated, and only one kind of it: a 404-on-PUT under OIDC
+        # means "no trusted publisher is registered for this package", which is the state of a
+        # brand-new package (npm cannot register a publisher for a package that does not exist
+        # yet, so it must be hand-published once). Aborting there would withhold a canary from
+        # every package that IS ready — one un-bootstrapped package must not freeze npm updates
+        # for the whole repository. So the rest publish, the name is recorded, and the last
+        # step fails the run with the command that fixes it. Any other refusal aborts at once.
         run: |
           set -euo pipefail
           provenance=(--provenance)
           [ "${{ steps.auth.outputs.mode }}" = token ] && provenance=()
-          for p in shared pi-adapter server; do
+          blocked=""
+          for p in ${{ steps.pkgs.outputs.dirs }}; do
+            name=$(node -p "require('./packages/$p/package.json').name")
             echo "::group::publish packages/$p"
             if ! npm publish -w "./packages/$p" "${provenance[@]}" --access public --tag "${{ steps.kind.outputs.tag }}" > /tmp/pub.log 2>&1; then
               cat /tmp/pub.log
-              if grep -q "404 Not Found - PUT" /tmp/pub.log; then
-                if [ "${{ steps.auth.outputs.mode }}" = oidc ]; then
-                  echo "::error::npm refused this publisher (it answers 404, not 403, to hide existence). Under OIDC that means no trusted publisher is registered for this package yet: on its npm Settings page add Trusted Publishing -> GitHub Actions, owner h8ntome, repo piwebui, workflow name release.yml. Alternatively set the NPM_TOKEN repo secret."
-                else
-                  echo "::error::npm refused this publisher (404, not 403, by design). The NPM_TOKEN secret cannot write to this package: it must cover 'All packages' with read-and-manage rights, and cannot be limited to a per-package allowlist."
-                fi
+              if grep -q "404 Not Found - PUT" /tmp/pub.log && [ "${{ steps.auth.outputs.mode }}" = oidc ]; then
+                echo "::warning::packages/$p ($name) was NOT published: npm has no trusted publisher registered for it. Register it once (npm >= 11.15, from a web login or a granular token that does NOT bypass 2FA): npm trust github $name --repo h8ntome/piwebui --file release.yml --allow-publish — or on the package's npm Settings page: Trusted Publishing -> GitHub Actions, owner h8ntome, repo piwebui, workflow name release.yml."
+                blocked="${blocked:+$blocked }$name"
+              elif grep -q "404 Not Found - PUT" /tmp/pub.log; then
+                echo "::error::npm refused this publisher (404, not 403, by design). The NPM_TOKEN secret cannot write to $name: it must cover 'All packages' with read-and-manage rights, and cannot be limited to a per-package allowlist."
+                exit 1
               elif grep -q "cannot publish over the previously published versions" /tmp/pub.log; then
                 echo "::error::this version already exists on npm and versions are immutable; bump the manifests (or let the canary stamp pick a fresh run number)."
+                exit 1
+              else
+                exit 1
               fi
-              exit 1
+            else
+              cat /tmp/pub.log
             fi
-            cat /tmp/pub.log
             echo "::endgroup::"
           done
+          echo "blocked=$blocked" >> "$GITHUB_OUTPUT"
+          echo "publishing complete; blocked on a missing trusted publisher: ${blocked:-none}"
 
       - name: Verify what a new install actually gets
         # The packaging gate proves the tree; only the registry proves the release. This is
@@ -193,23 +222,39 @@ jobs:
         timeout-minutes: 6
         run: |
           set -euo pipefail
-          npm run verify:published -- --version "${{ steps.kind.outputs.version }}" --settle 120
-          npm run verify:published -- --tag "${{ steps.kind.outputs.tag }}" --expect-version "${{ steps.kind.outputs.version }}"
+          blocked="${{ steps.publish.outputs.blocked }}"
+          npm run verify:published -- --version "${{ steps.kind.outputs.version }}" --settle 120 --all --allow-missing "$blocked"
+          npm run verify:published -- --tag "${{ steps.kind.outputs.tag }}" --expect-version "${{ steps.kind.outputs.version }}" --all --allow-missing "$blocked"
 
       - name: Show what landed
         run: |
+          set -euo pipefail
           sleep 20
           ver="${{ steps.kind.outputs.version }}"
+          tag="${{ steps.kind.outputs.tag }}"
           {
             echo "## ${{ steps.kind.outputs.kind }} publish ${ver}"
             echo
-            echo "| package | ${{ steps.kind.outputs.tag }} |"
+            echo "| package | $tag |"
             echo "| --- | --- |"
           } >> "$GITHUB_STEP_SUMMARY"
-          for n in @piwebui/shared @piwebui/pi-adapter @piwebui/pi-web; do
-            got=$(npm view "$n" "${{ steps.kind.outputs.tag }}.version" 2>/dev/null || npm view "$n" version 2>/dev/null || echo 'not visible yet')
-            printf "%-22s %s\n" "$n" "$got"
-            echo "| \`$n\` | \`$got\` |" >> "$GITHUB_STEP_SUMMARY"
+          for n in ${{ steps.pkgs.outputs.names }}; do
+            # dist-tags.<tag>, not <tag>.version: asking for `.version` on a string answers
+            # with empty output and exit 0, which printed a blank row here.
+            got=$(npm view "$n" "dist-tags.$tag" 2>/dev/null || true)
+            if [ -z "$got" ]; then got="not visible on $tag"; fi
+            if [ "$got" = "$ver" ]; then mark=""; else mark=" (expected $ver)"; fi
+            printf "%-24s %s%s\n" "$n" "$got" "$mark"
+            echo "| \`$n\` | \`$got\`$mark |" >> "$GITHUB_STEP_SUMMARY"
           done
           echo >> "$GITHUB_STEP_SUMMARY"
           echo 'Install a canary build with `npm install -g @piwebui/pi-web@next`.' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fail the run for anything that could not be published
+        # Kept last on purpose: the summary above is what tells you which packages landed, and
+        # a red run with a package list and one command is the point — the gap must never be
+        # quiet. Everything that could publish did publish.
+        if: steps.publish.outputs.blocked != ''
+        run: |
+          echo "::error::Not every publishable package was published: ${{ steps.publish.outputs.blocked }} — npm refused them because no trusted publisher is registered for those packages (a package that has just been created cannot have one until it exists). Fix once per package: npm trust github <name> --repo h8ntome/piwebui --file release.yml --allow-publish. Every other package published normally; re-run this workflow after registering and the skipped package catches up."
+          exit 1

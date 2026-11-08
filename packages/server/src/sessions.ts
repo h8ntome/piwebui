@@ -13,9 +13,11 @@ import path from "node:path";
 import {
   ENTRIES_PAGE_DEFAULT,
   MAX_MANAGED_RUNTIMES,
+  MAX_OBSERVED_DIALOGS,
   SNAPSHOT_ENTRY_PAGE,
   SETTLED_HOST_CLEANUP_MS,
   TESTED_PI_VERSIONS,
+  isPiVersionAllowed,
   type Capabilities,
   type ConflictInfo,
   type ControlState,
@@ -42,6 +44,39 @@ import type { Driver } from "./drivers.ts";
 import { LfFramer, decodeRecord, classifyChange, type FileIdentity } from "@piwebui/pi-adapter/tail";
 import { logInfo, logWarn } from "./log.ts";
 import crypto from "node:crypto";
+
+/**
+ * Structural view of a dial-mode bridge connection, so `sessions.ts` does not import the
+ * accepting transport module (and can be tested with a stub driver).
+ */
+export interface BridgeLike extends Driver {
+  sessionId: string;
+  sessionGeneration: number;
+  piMode?: string;
+  adapterVersion?: string;
+  procStart?: number;
+  attested?: boolean;
+}
+
+/** Claims a bridge makes about the session it owns (subset of the `hello` frame). */
+export interface BridgeClaim {
+  runtimeId: string;
+  sessionId: string;
+  sessionFile: string | null;
+  cwd: string | null;
+  piVersion?: string;
+  piMode?: string;
+  sessionGeneration?: number;
+  capabilities?: Capabilities;
+}
+
+/** Hub key carrying machine-wide facts instead of one session's stream (03 §5). */
+export const GLOBAL_STREAM_KEY = "*";
+
+/** Stable session key for a pi session UUID: the same terminal session always maps here. */
+export function keyForSessionId(sessionId: string): string {
+  return "s_" + crypto.createHash("sha256").update(sessionId).digest("hex").slice(0, 16);
+}
 
 export interface SessionRec {
   key: string;
@@ -87,10 +122,21 @@ export interface SessionRec {
   released: boolean;
 }
 
+/** Allowlist rows historically stored the absolute path as the label; show a name instead. */
+function displayLabel(p: string, label?: string | null): string {
+  const t = (label ?? "").trim();
+  if (!t || t === p) return path.basename(p) || p;
+  return t;
+}
+
 export class Sessions {
   byKey = new Map<string, SessionRec>();
   byPath = new Map<string, SessionRec>();
+  /** pi session UUID -> rec (D-3): the identity that exists before the file does. */
+  bySessionId = new Map<string, SessionRec>();
   workspaces = new Map<string, WorkspaceInfo>();
+  /** Machine-wide bridge facts, reported by `/api/v1/bridge/diagnose`. */
+  bridgeDiag: { mode: string; listener: string; rejects: Record<string, number> } | null = null;
 
   constructor(
     public cfg: Config,
@@ -105,12 +151,22 @@ export class Sessions {
 
   /* ---------------- workspaces ---------------- */
   loadWorkspaces() {
+    this.workspaces.clear();
     const rows = this.store.db.prepare("SELECT key,path,label,added_at FROM workspaces").all() as { key: string; path: string; label: string; added_at: string }[];
-    for (const r of rows) this.workspaces.set(r.key, { workspaceKey: r.key, path: r.path, label: r.label ?? r.path, addedAt: r.added_at });
+    for (const r of rows) this.workspaces.set(r.key, { workspaceKey: r.key, path: r.path, label: displayLabel(r.path, r.label), addedAt: r.added_at });
+  }
+  /**
+   * Re-read the allowlist from SQLite. `pi-web allow <dir>` writes to the same database the
+   * running server holds open, so without this the CLI silently had no effect until a restart.
+   * Cheap (one small table scan) and called on the list endpoints, which are the only places
+   * a newly allowed folder has to show up.
+   */
+  reloadWorkspaces() {
+    try { this.loadWorkspaces(); } catch { /* keep the in-memory view if the db is busy */ }
   }
   addWorkspace(canonPath: string, label?: string): WorkspaceInfo {
     const key = "w_" + crypto.randomBytes(6).toString("hex");
-    const info: WorkspaceInfo = { workspaceKey: key, path: canonPath, label: label ?? path.basename(canonPath), addedAt: new Date().toISOString() };
+    const info: WorkspaceInfo = { workspaceKey: key, path: canonPath, label: label?.trim() || path.basename(canonPath), addedAt: new Date().toISOString() };
     this.store.db.prepare("INSERT INTO workspaces(key,path,label,added_at) VALUES(?,?,?,?) ON CONFLICT(path) DO NOTHING").run(key, canonPath, info.label, info.addedAt);
     const existing = this.store.db.prepare("SELECT key FROM workspaces WHERE path=?").get(canonPath) as { key: string } | undefined;
     info.workspaceKey = existing?.key ?? key;
@@ -133,7 +189,21 @@ export class Sessions {
     const def = path.join(agentDir, "sessions");
     if (fs.existsSync(def)) roots.push(def);
     roots.push(...this.cfg.sessionRootsExtra.filter((r) => fs.existsSync(r)));
+    // An attested bridged pi may live under --session-dir or another PI_CODING_AGENT_DIR; without
+    // its directory the read worker would list the session but fail to page it (03 §4).
+    if (this.trustBridgeDirs()) {
+      for (const rec of this.byKey.values()) {
+        if (rec.kind === "bridged" && rec.driver && rec.path) {
+          const dir = path.dirname(rec.path);
+          if (fs.existsSync(dir)) roots.push(dir);
+        }
+      }
+    }
     return [...new Set(roots)];
+  }
+
+  trustBridgeDirs(): boolean {
+    return this.cfg.bridge?.trustSessionDirs !== false && process.env.PIWEB_BRIDGE_TRUST_SESSION_DIRS !== "0";
   }
   agentDir(): string {
     return this.cfg.agentDir ?? process.env.PI_CODING_AGENT_DIR ?? path.join(process.env.HOME ?? "", ".pi", "agent");
@@ -238,6 +308,127 @@ export class Sessions {
   attach(rec: SessionRec) {
     this.byKey.set(rec.key, rec);
     if (rec.path) this.byPath.set(rec.path, rec);
+    const sid = rec.meta.piSessionId;
+    if (sid) {
+      const holder = this.bySessionId.get(sid);
+      if (!holder || holder.key === rec.key) this.bySessionId.set(sid, rec);
+    }
+  }
+
+  /** Full unregister: maps + file watch. Used when a mirror twin is merged into a bridged rec. */
+  forget(rec: SessionRec) {
+    this.byKey.delete(rec.key);
+    if (rec.path && this.byPath.get(rec.path) === rec) this.byPath.delete(rec.path);
+    const sid = rec.meta.piSessionId;
+    if (sid && this.bySessionId.get(sid) === rec) this.bySessionId.delete(sid);
+    this.stopWatch(rec);
+    this.hub.drop(rec.key);
+  }
+
+  /** Machine-wide event (03 §5): `runtimeAttached`, `sessionAppeared`, ... */
+  emitGlobal(name: Parameters<typeof this.hub.emit>[1], payload: unknown) {
+    try { this.hub.emit(GLOBAL_STREAM_KEY, name, payload); } catch { /* the global stream never blocks adoption */ }
+  }
+
+  /** Persist a registry row for a session rec (idempotent; keeps `path` unique). */
+  persistRec(rec: SessionRec) {
+    const now = new Date().toISOString();
+    try {
+      if (rec.path) this.store.db.prepare("DELETE FROM sessions WHERE path=? AND key<>?").run(rec.path, rec.key);
+      this.store.db
+        .prepare(`INSERT INTO sessions(key,path,kind,workspace_key,created_at,updated_at,origin,pi_session_id)
+          VALUES(?,?,?,?,?,?,?,?)
+          ON CONFLICT(key) DO UPDATE SET path=excluded.path, kind=excluded.kind, workspace_key=excluded.workspace_key,
+            updated_at=excluded.updated_at, pi_session_id=excluded.pi_session_id`)
+        .run(rec.key, rec.path, rec.kind, rec.workspaceKey, rec.createdAt, now, rec.kind === "bridged" ? "bridge" : "file", rec.meta.piSessionId);
+    } catch (e) {
+      logWarn("session_persist_failed", { key: rec.key.slice(0, 10), err: String((e as Error).message).slice(0, 120) });
+    }
+  }
+
+  /* ---------------- bridge adoption (D-3, 03 §4) ---------------- */
+
+  /**
+   * Make (or refresh) the session record a bridge connection owns.
+   *
+   * Identity order is pi `sessionId`, then path, then new: a fresh terminal session has no file
+   * yet (pi pre-allocates the path), so a path-first lookup could never represent it (E6/B-6).
+   */
+  adoptBridge(conn: BridgeLike, claim: BridgeClaim): { rec: SessionRec; adopted: boolean } {
+    const sessionId = claim.sessionId;
+    const filePath = claim.sessionFile ? this.realpathSafe(claim.sessionFile) : null;
+    const existingBySession = this.bySessionId.get(sessionId);
+    const existingByPath = filePath ? this.byPath.get(filePath) : undefined;
+    const twin = existingBySession ?? existingByPath;
+    const rec = twin ?? this.blankRec(keyForSessionId(sessionId), filePath, "bridged");
+    const wasNew = !this.byKey.has(rec.key);
+    rec.kind = "bridged";
+    rec.meta.piSessionId = sessionId;
+    if (filePath) { rec.path = filePath; rec.meta.path = filePath; }
+    if (claim.cwd) { rec.meta.cwd = claim.cwd; }
+    if (!rec.workspaceKey) {
+      const ws = this.workspaceForCwd(claim.cwd ?? "");
+      if (ws) { rec.workspaceKey = ws.workspaceKey; rec.meta.workspaceKey = ws.workspaceKey; }
+    }
+    rec.sessionGeneration = claim.sessionGeneration ?? rec.sessionGeneration;
+    if (rec.driver && rec.driver !== conn) {
+      // One live runtime per session, whatever the transport (03 §4 "both").
+      conn.dispose("duplicate owner refused");
+      return { rec, adopted: false };
+    }
+    rec.driver = conn;
+    conn.sessionId = sessionId;
+    if (filePath) conn.sessionFile = filePath;
+    this.attach(rec);
+    this.bySessionId.set(sessionId, rec);
+    this.persistRec(rec);
+    // A mirror row may already exist for the same file (created by the file scan first): merge it.
+    const otherTwin = existingBySession && existingByPath && existingBySession !== existingByPath ? existingByPath : null;
+    this.mergeTwinInto(rec, otherTwin);
+    if (rec.path) this.ensureWatch(rec);
+    if (wasNew) {
+      logInfo("bridge_session_adopted", { key: rec.key.slice(0, 10), piSessionId: sessionId.slice(0, 8), file: rec.path ? "yes" : "not yet on disk" });
+      this.emitGlobal("sessionAppeared", { sessionKey: rec.key, mode: this.mode(rec), cwd: rec.meta.cwd, piSessionId: sessionId });
+    }
+    return { rec, adopted: wasNew };
+  }
+
+  /** Retire a session rec that its bridge switched away from: readable as a mirror, never hijacked. */
+  retireBridge(rec: SessionRec, reason: string): void {
+    if (rec.driver) rec.driver = null;
+    rec.state.phase = "unknown";
+    rec.state.previews.clear();
+    rec.state.tools.clear();
+    rec.state.dialogs.clear();
+    if (rec.meta.piSessionId) {
+      if (this.bySessionId.get(rec.meta.piSessionId) === rec) this.bySessionId.delete(rec.meta.piSessionId);
+    }
+    this.retireHook?.(rec, reason);
+    this.hub.emit(rec.key, "ownerChanged", { runtime: null, mode: this.mode(rec) });
+    this.hub.emit(rec.key, "resync", { reason });
+    logInfo("bridge_session_retired", { key: rec.key.slice(0, 10), reason });
+    this.emitGlobal("sessionRetired", { sessionKey: rec.key, mode: this.mode(rec), reason });
+  }
+
+  /**
+   * When a mirror row and a bridged row describe the same conversation, keep the bridged one
+   * (its key is what the browser is watching) and retire the mirror (E12's duplicate twin).
+   */
+  private mergeTwinInto(keep: SessionRec, other: SessionRec | null): void {
+    if (!other || other === keep) return;
+    if (other.driver) return; // never steal a live runtime
+    this.retireBridge(other, "merged");
+    this.forget(other);
+    this.store.db.prepare("DELETE FROM sessions WHERE key=?").run(other.key);
+    logInfo("bridge_twin_merged", { kept: keep.key.slice(0, 10), retired: other.key.slice(0, 10) });
+  }
+
+  /** Installed by the server wiring: in-flight operations of a retired owner become `unknown`. */
+  retireHook?: (rec: SessionRec, reason: string) => void;
+
+  /** Resolve a claimed session path without letting a symlink redirect adoption. */
+  private realpathSafe(p: string): string | null {
+    try { return fs.realpathSync(p); } catch { return p; }
   }
 
   mode(rec: SessionRec): SessionMode {
@@ -251,8 +442,30 @@ export class Sessions {
 
   compat(rec: SessionRec): SessionStatus["compat"] {
     const v = rec.driver?.piVersion ?? this.piPkg.version ?? null;
-    const tested = v !== null && TESTED_PI_VERSIONS.includes(v);
-    return { piVersion: v, tested, detail: tested ? `adapter validated for pi ${v}` : `pi ${v ?? "unknown"} not validated by this pi-web build: writes disabled (fail-closed)` };
+    const tested = isPiVersionAllowed(v);
+    const validated = TESTED_PI_VERSIONS.includes(v ?? "");
+    if (tested && !validated) {
+      return { piVersion: v, tested: true, detail: `pi ${v} is not in this build's validated list but was allowlisted with PIWEB_ALLOW_PI_VERSIONS` };
+    }
+    return {
+      piVersion: v,
+      tested,
+      detail: tested
+        ? `adapter validated for pi ${v}`
+        : `pi ${v ?? "unknown"} is not validated by this pi-web build: writes are disabled (fail-closed), reads keep working. Override with PIWEB_ALLOW_PI_VERSIONS=${v ?? "<version>"}, or upgrade pi-web.`,
+    };
+  }
+
+  /** One-sentence answer to "why is this session not controllable?" (D-8). */
+  why(rec: SessionRec): string {
+    if (rec.driver) {
+      if (!this.compat(rec).tested) return `pi ${rec.driver.piVersion} not validated: writes disabled (override with PIWEB_ALLOW_PI_VERSIONS)`;
+      return "";
+    }
+    if (rec.conflict) return `file conflict (${rec.conflict.kind}): writes frozen until the writers are sorted out`;
+    if (!rec.path) return "no owning runtime and no file: this session is history only";
+    if (!rec.file.exists) return "no bridge connected to the pi that owns this file";
+    return "no bridge connected to the pi that owns this file";
   }
 
   identity(rec: SessionRec): RuntimeIdentity | null {
@@ -541,12 +754,42 @@ export class Sessions {
         rec.sessionGeneration++;
         this.hub.bumpGeneration(key);
         s.previews.clear(); s.tools.clear(); s.dialogs.clear(); s.observedDialogs = [];
+        if (typeof ev.payload.sessionGeneration === "number") rec.sessionGeneration = Math.max(rec.sessionGeneration, Number(ev.payload.sessionGeneration));
+        if (typeof ev.payload.sessionId === "string") this.bySessionId.set(String(ev.payload.sessionId), rec);
+        if (typeof ev.payload.sessionFile === "string" && ev.payload.sessionFile && rec.path !== ev.payload.sessionFile) {
+          const file = String(ev.payload.sessionFile);
+          if (this.byPath.get(rec.path ?? "") === rec) this.byPath.delete(rec.path ?? "");
+          rec.path = file;
+          rec.meta.path = file;
+          this.byPath.set(file, rec);
+          this.persistRec(rec);
+          this.ensureWatch(rec);
+        }
         this.hub.emit(key, "resync", { reason: "session_generation_changed" });
         break;
       }
       case "session_tree": {
         if (ev.payload.newLeafId !== undefined) s.leaf = (ev.payload.newLeafId as string | null) ?? s.leaf;
         this.hub.emit(key, "runtimeState", this.runtimePayload(rec));
+        break;
+      }
+      case "runtime_state": {
+        // The bridge reports phase transitions it can see (compaction) that are not their own event.
+        const phase = ev.payload.phase as RunPhase | undefined;
+        if (phase) s.phase = phase;
+        this.hub.emit(key, "runtimeState", this.runtimePayload(rec));
+        break;
+      }
+      case "bridge_gap": {
+        // The bridge's replay window could not cover us: the client must resnapshot, and the
+        // only honest way to say that is the same resync a queue overflow uses.
+        logWarn("bridge_replay_gap", { key: rec.key.slice(0, 10), from: String(ev.payload.fromSeq ?? 0) });
+        this.hub.bumpGeneration(key);
+        this.hub.emit(key, "resync", { reason: "bridge_replay_gap" });
+        break;
+      }
+      case "diag": {
+        this.hub.emit(key, "unknown", { kind: "bridge_diag", ...(ev.payload as object) });
         break;
       }
       case "dialog_request": {
@@ -647,13 +890,15 @@ export class Sessions {
     if (ownerSnap) this.mergeOwnerSnapshot(rec, ownerSnap);
     let entries: EntryView[] = rec.file.recentEntries;
     let nextCursor: string | null = null;
+    let diagnostics: { message: string; byteOffset: number }[] = [];
     let entryTotal = rec.state.entryCount ?? rec.file.recentEntries.length;
     if (rec.path && rec.file.exists) {
       try {
-        const page = await this.read.call<EntryPage & { nextCursor: string | null }>("pageTail", { file: rec.path, limit: entryLimit });
+        const page = await this.read.call<EntryPage & { nextCursor: string | null; diagnostics?: { message: string; byteOffset: number }[] }>("pageTail", { file: rec.path, limit: entryLimit });
         entries = page.entries;
         entryTotal = page.entryCount;
         nextCursor = page.nextCursor;
+        diagnostics = page.diagnostics ?? [];
       } catch { /* fall back to cached tail */ }
     }
     const status = this.status(rec);
@@ -665,6 +910,10 @@ export class Sessions {
       entries,
       nextEntriesCursor: nextCursor,
       entryTotal,
+      // Truth about the window: a snapshot hands back the NEWEST entries, so anything the
+      // client is missing sits *before* this page. The UI turns this into "load older".
+      olderAvailable: entries.length > 0 && entries.length < entryTotal,
+      diagnostics,
       runtimeState: rec.driver ? this.runtimePayload(rec) : null,
       pendingDialogs: [...rec.state.dialogs.values()].filter((d) => !d.answered),
       observedDialogs: rec.state.observedDialogs.filter((d) => !d.answered),
@@ -690,13 +939,32 @@ export class Sessions {
     if (Array.isArray(o.pendingDialogs)) {
       s.dialogs = new Map((o.pendingDialogs as DialogRequest[]).map((d) => [d.requestId, { ...d, terminalObserved: !!d.terminalObserved }]));
     }
-    if (Array.isArray(o.observedDialogs)) s.observedDialogs = o.observedDialogs as DialogRequest[];
-    if (typeof o.sessionFile === "string" && rec.path === null) rec.path = o.sessionFile;
+    if (Array.isArray(o.observedDialogs)) s.observedDialogs = (o.observedDialogs as DialogRequest[]).slice(0, MAX_OBSERVED_DIALOGS);
+    // Owner facts a bridge may have learned after the handshake (B-8: these used to be stale
+    // forever because only the handshake filled them in).
+    if (typeof o.sessionFile === "string" && o.sessionFile) {
+      if (rec.path === null) rec.path = o.sessionFile;
+      if (rec.meta.path !== o.sessionFile) {
+        rec.meta.path = o.sessionFile;
+        rec.path = o.sessionFile;
+        this.byPath.set(o.sessionFile, rec);
+        this.persistRec(rec);
+        if (rec.driver) rec.driver.sessionFile = o.sessionFile;
+      }
+    }
     if (rec.kind === "managed" && typeof o.sessionFile === "string" && rec.meta.path !== o.sessionFile) {
       rec.meta.path = o.sessionFile; rec.path = o.sessionFile; this.byPath.set(o.sessionFile, rec);
       this.store.db.prepare("UPDATE sessions SET path=? WHERE key=?").run(o.sessionFile, rec.key);
     }
-    if (typeof o.piVersion === "string") rec.driver!.piVersion = o.piVersion;
+    if (typeof o.piVersion === "string" && rec.driver) rec.driver.piVersion = o.piVersion;
+    if (o.capabilities && typeof o.capabilities === "object" && rec.driver) rec.driver.capabilities = o.capabilities as Capabilities;
+    if (typeof o.sessionId === "string" && o.sessionId && rec.meta.piSessionId !== o.sessionId) {
+      rec.meta.piSessionId = o.sessionId;
+      this.bySessionId.set(o.sessionId, rec);
+      this.persistRec(rec);
+    }
+    if (typeof o.cwd === "string" && rec.driver && !rec.driver.cwd) rec.driver.cwd = o.cwd;
+    if (typeof o.stateRevision === "number") s.stateRevision = o.stateRevision;
   }
 
   /* ---------------- status ---------------- */

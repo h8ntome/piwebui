@@ -439,3 +439,61 @@
 }
 .pw-stepper button:hover:not(:disabled) { background: var(--dsw-alias-bg-layer-1); }
 .pw-stepper button:disabled { color: var(--dsw-alias-label-caption); cursor: default; }
+
+/* ---------------------------------------------------------------------------
+   Audit refinements: overlay layers, dialogs, menus, toasts, steppers.
+   --------------------------------------------------------------------------- */
+
+/* Each overlay kind owns a layer; the container is click-through, the content is not. */
+.pw-portal { position: fixed; inset: 0; pointer-events: none; }
+.pw-portal--scrim { z-index: var(--pw-z-scrim); }
+.pw-portal--dialog { z-index: var(--pw-z-dialog); }
+.pw-portal--menu { z-index: var(--pw-z-menu); }
+.pw-portal--tooltip { z-index: var(--pw-z-tooltip); }
+.pw-portal--toast { z-index: var(--pw-z-toast); }
+.pw-portal > * { pointer-events: auto; }
+.pw-portal--tooltip > *, .pw-portal--toast > * { pointer-events: none; }
+.pw-toast { pointer-events: auto; }
+
+.pw-modalRoot { z-index: 0; }
+.pw-modalRoot__mask { background: var(--pw-scrim); }
+.pw-menu { z-index: var(--pw-z-menu); }
+.pw-tooltip { z-index: 0; }
+.pw-toasts { z-index: 0; }
+
+/* Dialogs need an edge in dark mode, where the panel and the dialog are both near-black. */
+.pw-dialog { border: var(--pw-hairline, .5px) solid var(--dsw-alias-border-l3); }
+.pw-confirm { padding: 0 24px 8px; color: var(--dsw-alias-label-secondary); font-size: 13px; line-height: 20px; }
+
+/* Selected menu rows were visually identical to plain rows (SB-12). */
+.pw-menu__item--selected { color: var(--dsw-alias-label-primary); font-weight: 500; }
+.pw-menu__item--selected .pw-menu__check { color: var(--dsw-static-deepseek-500); }
+
+/* Toasts live in the bottom-right corner, where they no longer cover the header (SET-03).
+   The base rule centered the stack with a transform; that has to be undone here or the stack
+   hangs half its width off to the left of its own anchor. */
+.pw-toasts { top: auto; left: auto; right: 16px; bottom: 16px; align-items: flex-end; max-height: 60vh; overflow: hidden; transform: none; }
+.pw-toast__count { color: var(--pw-label-meta); font-variant-numeric: tabular-nums; }
+@media (max-width: 640px) {
+  .pw-toasts { left: 12px; right: 12px; bottom: 12px; align-items: stretch; }
+  .pw-toast { width: 100%; }
+}
+
+/* Steppers take direct entry (SET-05). */
+.pw-stepper__input {
+  width: 62px; height: 26px; border: none; outline: none; background: none;
+  padding: 0 4px 0 8px; font: inherit; color: var(--dsw-alias-label-primary);
+  font-variant-numeric: tabular-nums; text-align: right;
+}
+.pw-stepper__input:focus { background: var(--dsw-alias-interactive-bg-hover); border-radius: var(--dsw-radius-sm); }
+.pw-stepper > span:last-child button { opacity: .85; }
+.pw-stepper > span:last-child button:disabled { opacity: .3; }
+
+/* The "stream disconnected" pill: one place, announced to AT (SRV-05 / A11Y-05). */
+.pw-statusPill { position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%); z-index: 900; }
+
+.pw-link { color: var(--dsw-alias-link); text-decoration: none; }
+.pw-link:hover { text-decoration: underline; }
+
+/* Settings rail: selected row is a real selection, not a faint wash (SET-07). */
+.pw-settings__nav .pw-nav__row--active { background: var(--dsw-alias-interactive-bg-hover-solid); color: var(--dsw-alias-label-primary); }

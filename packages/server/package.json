@@ -22,7 +22,8 @@
     "src",
     "dist",
     "bin",
-    "client-dist"
+    "client-dist",
+    "bridge-extension"
   ],
   "main": "./dist/main.js",
   "license": "MIT",

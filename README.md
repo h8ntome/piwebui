@@ -103,9 +103,12 @@ disabled rather than guessed at.
 
 - **Browse real session history** — transcripts, tool calls and results, thinking, tree and branch
   context, statistics. Reads run in an isolated worker restricted to the directories you allowlist.
-- **Control a terminal `pi` from the browser.** Start that `pi` with the bridge extension and, while it
-  is idle at a prompt, you can prompt, steer, follow up, abort, switch model and reasoning, rename,
-  compact, and inspect tree/context/snapshot — while your keyboard in the terminal always wins.
+- **Control a terminal `pi` from the browser.** Install the bridge once —
+  `pi install npm:@piwebui/pi-web-bridge` — and every `pi` you open afterwards shows up as
+  *Terminal (bridged)*, live, with no token, no environment variable and no `pi -e`. While it runs
+  you can prompt, steer, follow up, abort, switch model and reasoning, rename, compact, and inspect
+  tree/context/snapshot — and your keyboard in the terminal always wins. `/new`, `/resume`, `/fork`
+  and `/reload` inside `pi` keep it working; `pi-web doctor` says why it is not.
 - **Create sessions in the browser.** They run in managed `pi` SDK child processes, one per session,
   and hand back cleanly: the UI waits for the host to exit and release the file before it offers
   `pi --session /abs/path/to/session.jsonl`.
@@ -121,9 +124,29 @@ disabled rather than guessed at.
 | Package | Role |
 | --- | --- |
 | `@piwebui/pi-web` | the server and the `pi-web` CLI |
-| `@piwebui/pi-adapter` | everything that touches pi: version gate, pure read worker, managed host, terminal bridge |
+| `@piwebui/pi-adapter` | everything that touches pi: version gate, pure read worker, managed host, legacy bridge |
+| [@piwebui/pi-web-bridge](./packages/pi-extension) | the pi extension that bridges a terminal `pi` to pi-web — zero config, zero dependencies |
 | `@piwebui/shared` | types, schemas, wire frames, colour math |
 | `@piwebui/client` | the React client, built into `@piwebui/pi-web` |
+
+### Bridging a terminal `pi`
+
+```bash
+pi install npm:@piwebui/pi-web-bridge     # once, ever
+pi-web                                     # then, as usual
+pi                                         # in any project: it shows up live in the browser
+```
+
+The direction matters and is the whole design: **the terminal dials pi-web**, not the other way
+around. `pi-web serve` publishes `~/.pi-web/bridge.json` (`0600`: socket path + token) and listens
+on one Unix socket per server; each `pi` finds that descriptor and connects to it. That is why a
+`pi` that started *before* `pi-web` still connects (≤ 15 s), why nothing has to be cleaned up after
+a `kill -9`, and why a second server on the same machine never fights over a socket.
+
+Inside `pi` the bridge is visible: a `● pi-web · 1 viewer · <serverId>` footer status and a `/piweb`
+command that prints the session, the viewers, dropped-frame counts — or, when it is not connected,
+the reason and the command that fixes it. `pi-web doctor` does the same from the server side, and
+`GET /api/v1/runtimes` / `GET /api/v1/bridge/diagnose` expose it to the UI.
 
 Session reads happen in a separate **read worker** that only sees allowlisted roots and opens files
 read-only. Live state reaches the browser over SSE with replay and resync. Commands are validated
@@ -139,8 +162,12 @@ pi-web allow <absolute-dir>              # allowlist a workspace
 pi-web workspaces                        # list allowlisted workspaces
 pi-web mint-token [--name n]             # long-lived API bearer token
 pi-web revoke-token --id ID
-pi-web install-bridge [--agent-dir DIR]  # install the bridge as a pi user extension
-pi-web print-bridge-command              # exact env + `pi -e` command for a terminal session
+pi-web doctor [--json]                   # why is my terminal pi not live in the browser?
+pi-web install-extension [--agent-dir DIR] # copy the bridge into ~/.pi/agent/extensions (or: pi install)
+pi-web install-bridge                      # deprecated alias of install-extension
+pi-web rotate-bridge-token                 # new bridge secret + descriptor rewrite
+pi-web trust-runtime <id> | revoke-runtime <id>
+pi-web pair                                # env line for bridging a pi on another host over ssh -L
 pi-web help | --version                  # usage / version
 ```
 

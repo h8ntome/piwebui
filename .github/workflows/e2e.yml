@@ -41,3 +41,10 @@ jobs:
         env:
           PIWEB_SMOKE_KEEP: "0"
         run: npx tsx e2e/server-smoke.mts
+
+      - name: "Terminal bridge smoke (real pi in a pty + real pi-web server)"
+        # The definition-of-done for the bridge: `pi install` the package, start a stock pi with
+        # no bridge environment variables, and prove it shows up live, streams, and takes browser
+        # prompts. Advisory for now, like the rest of this workflow.
+        continue-on-error: true
+        run: npm run smoke:bridge

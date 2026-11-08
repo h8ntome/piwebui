@@ -60,7 +60,7 @@ interface SettingsStore extends Settings {
   reset: () => void;
 }
 
-export const useSettings = create<SettingsStore>((set) => ({
+export const useSettings = create<SettingsStore>((set, get) => ({
   ...load(),
   set: (patch) => set((s) => {
     const next = { ...s, ...patch };
@@ -68,8 +68,12 @@ export const useSettings = create<SettingsStore>((set) => ({
     return patch;
   }),
   reset: () => {
+    // "Reset interface settings" means appearance, not "lose my place" (SET-02): the open
+    // session survives so a mis-click does not dump you back on the hero.
+    const keep = { lastSessionKey: get().lastSessionKey };
     try { localStorage.removeItem(KEY); } catch { /* ignore */ }
-    set({ ...DEFAULTS });
+    set({ ...DEFAULTS, ...keep });
+    try { localStorage.setItem(KEY, JSON.stringify({ ...DEFAULTS, ...keep })); } catch { /* ignore */ }
   },
 }));
 
@@ -80,7 +84,8 @@ export function applySettings(s: Settings): void {
   document.documentElement.style.colorScheme = dark ? "dark" : "light";
   document.documentElement.style.setProperty("--dsh-content-font-size", `${s.contentFontSize}px`);
   document.documentElement.style.setProperty("--dsh-code-font-size", `${s.codeFontSize}px`);
-  document.documentElement.dataset.inputModality = "pointer";
+  // Never touch inputModality here: it is detected from real input events, and resetting it
+  // to "pointer" on every settings change re-showed pointer-only styling after a theme switch.
 }
 
 /** True when the window is too narrow for the full sidebar / side panel. */
@@ -96,10 +101,29 @@ export function useNarrow(): boolean {
   );
 }
 
-/** Ephemeral (never persisted) window-shape state: phone = sidebar becomes a drawer. */
-export const useUi = create<{ phone: boolean; drawerOpen: boolean; set: (p: Partial<{ phone: boolean; drawerOpen: boolean }>) => void }>((set) => ({
+/** Phone: the sidebar becomes a drawer and the side panel must never take the viewport. */
+export function isPhoneWidth(w: number = window.innerWidth): boolean { return w < 640; }
+
+/** Tablet-ish: too narrow for the full sidebar, wide enough to keep a labelled rail. */
+export function useTablet(): boolean {
+  return useSyncExternalStore(
+    (cb) => {
+      const on = () => cb();
+      window.addEventListener("resize", on);
+      return () => window.removeEventListener("resize", on);
+    },
+    () => window.innerWidth >= 640 && window.innerWidth < 900,
+    () => false,
+  );
+}
+
+/** Ephemeral (never persisted) window-shape state: phone = sidebar becomes a drawer,
+    panelSheet = the phone panel sheet was opened by a click in this visit (never restored
+    from the desktop setting, which is what used to squeeze a phone to nothing). */
+export const useUi = create<{ phone: boolean; drawerOpen: boolean; panelSheet: boolean; set: (p: Partial<{ phone: boolean; drawerOpen: boolean; panelSheet: boolean }>) => void }>((set) => ({
   phone: typeof window !== "undefined" && window.innerWidth < 640,
   drawerOpen: false,
+  panelSheet: false,
   set: (p) => set(p),
 }));
 
@@ -108,7 +132,7 @@ export function trackWindowShape(): () => void {
     const phone = window.innerWidth < 640;
     const prev = useUi.getState().phone;
     useUi.getState().set({ phone });
-    if (prev !== phone) useUi.getState().set({ drawerOpen: false });
+    if (prev !== phone) useUi.getState().set({ drawerOpen: false, panelSheet: false });
   };
   on();
   window.addEventListener("resize", on);

@@ -1,7 +1,7 @@
 /** Tool call rendering: disclosure row + io/structured body, in the reference tool styles. */
 import { useMemo, useState } from "react";
 import { Icon } from "../lib/icons";
-import { oneLine, safeJson } from "../lib/format";
+import { oneLine, safeJson, toolDuration } from "../lib/format";
 import type { ToolStateView } from "../lib/store";
 
 export type Block = Record<string, unknown> & { type?: string };
@@ -17,9 +17,18 @@ const TOOL_ICON: Record<string, string> = {
 
 const TOOL_TITLE: Record<string, string> = {
   bash: "Bash", read: "Read", write: "Write", edit: "Edit", str_replace_editor: "Edit",
-  ls: "List", find: "Find", glob: "Find", grep: "Search", task: "Subagent", subagent: "Subagent",
-  webfetch: "Fetch", web_search: "Search", todowrite: "Todos", todo_write: "Todos",
+  ls: "List", find: "Find", glob: "Find", grep: "Search", search: "Search", question: "Question",
+  ask_user: "Ask user", task: "Subagent", subagent: "Subagent", webfetch: "Fetch",
+  web_search: "Search", todowrite: "Todos", todo_write: "Todos", list_dir: "List",
 };
+
+/** Display name for any tool: known map first, then "snake_case → Snake case" (TOOL-04). */
+export function toolTitle(name: string): string {
+  if (TOOL_TITLE[name]) return TOOL_TITLE[name];
+  const spaced = name.replace(/[_-]+/g, " ").trim();
+  if (!spaced) return "Tool";
+  return spaced.replace(/\b\w/g, (c) => c.toUpperCase());
+}
 
 function argsOf(call: Block | null, state?: ToolStateView): Record<string, unknown> {
   const a = (call?.arguments ?? state?.argsPreview) as unknown;
@@ -38,11 +47,17 @@ export function toolSummary(name: string, args: Record<string, unknown>): string
   if (name === "bash") return oneLine(args.command ?? "", 100);
   const p = args.path ?? args.file_path ?? args.pattern ?? args.query ?? args.prompt ?? args.url;
   if (p != null) return oneLine(p, 90);
+  const known = Object.entries(args).filter(([, v]) => typeof v === "string" || typeof v === "number" || typeof v === "boolean");
+  if (known.length) return oneLine(known.slice(0, 3).map(([k, v]) => `${k}=${v}`).join(" · "), 90);
   return oneLine(args, 80);
 }
 
-function Leading({ state, icon }: { state: string; icon: string }) {
-  if (state === "running") return <Icon name="loading-outline" size={15} className="pw-spinIcon" />;
+function Leading({ state, icon, readOnly }: { state: string; icon: string; readOnly: boolean }) {
+  if (state === "running") {
+    // A mirror session with no result recorded is not a run in progress (TOOL-05).
+    if (readOnly) return <Icon name="inspect-outline" size={15} style={{ color: "var(--dsw-alias-label-caption)" }} />;
+    return <Icon name="loading-outline" size={15} className="pw-spinIcon" />;
+  }
   if (state === "error") return <Icon name="warning-outline" size={15} style={{ color: "var(--dsw-alias-state-error-primary)" }} />;
   if (state === "abandoned") return <Icon name="warning-outline" size={15} style={{ color: "var(--dsw-alias-state-warn-label)" }} />;
   return <Icon name={icon} size={15} />;
@@ -57,86 +72,139 @@ function Field({ k, v }: { k: string; v: unknown }) {
   );
 }
 
-/** Removed lines then added lines, each tinted the way the reference tints a diff. */
-function DiffLines({ oldText, newText }: { oldText: string; newText: string }) {
-  const line = (t: string, kind: "del" | "add") =>
-    t.split("\n").map((l, i) => (
-      <span key={`${kind}-${i}`} className={`pw-diff__${kind}`}>{kind === "del" ? "-" : "+"}{l + "\n"}</span>
-    ));
-  return <>{line(oldText, "del")}{line(newText, "add")}</>;
+export type DiffRow = { kind: "ctx" | "del" | "add"; text: string };
+
+/** Line diff (LCS) with 2 lines of context, so a multi-edit call reads as a diff instead of
+    "all deletions then all additions" (TOOL-01). Bounded: huge inputs fall back to blocks. */
+export function diffLines(oldText: string, newText: string, contextLines = 2): DiffRow[] {
+  const a = oldText.split("\n");
+  const b = newText.split("\n");
+  if (a.length * b.length > 250_000) {
+    return [...a.map((t) => ({ kind: "del" as const, text: t })), ...b.map((t) => ({ kind: "add" as const, text: t }))];
+  }
+  const n = a.length;
+  const m = b.length;
+  // Classic LCS table; sessions edit small hunks, so this stays comfortably cheap.
+  const dp: Uint32Array[] = Array.from({ length: n + 1 }, () => new Uint32Array(m + 1));
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      dp[i]![j] = a[i] === b[j] ? dp[i + 1]![j + 1]! + 1 : Math.max(dp[i + 1]![j]!, dp[i]![j + 1]!);
+    }
+  }
+  const raw: DiffRow[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < n && j < m) {
+    if (a[i] === b[j]) { raw.push({ kind: "ctx", text: a[i]! }); i++; j++; }
+    else if (dp[i + 1]![j]! >= dp[i]![j + 1]!) { raw.push({ kind: "del", text: a[i]! }); i++; }
+    else { raw.push({ kind: "add", text: b[j]! }); j++; }
+  }
+  while (i < n) raw.push({ kind: "del", text: a[i++]! });
+  while (j < m) raw.push({ kind: "add", text: b[j++]! });
+
+  // Keep context around changed rows only.
+  const keep = new Set<number>();
+  raw.forEach((r, idx) => {
+    if (r.kind === "ctx") return;
+    for (let k = idx - contextLines; k <= idx + contextLines; k++) if (k >= 0 && k < raw.length) keep.add(k);
+  });
+  const out: DiffRow[] = [];
+  let skipped = 0;
+  raw.forEach((r, idx) => {
+    if (keep.has(idx)) {
+      if (skipped) { out.push({ kind: "ctx", text: `… ${skipped} unchanged ${skipped === 1 ? "line" : "lines"}` }); skipped = 0; }
+      out.push(r);
+    } else if (r.kind === "ctx") skipped++;
+  });
+  if (skipped) out.push({ kind: "ctx", text: `… ${skipped} unchanged ${skipped === 1 ? "line" : "lines"}` });
+  return out;
 }
 
-export function ToolCall({ call, state }: { call: Block | null; state?: ToolStateView | undefined }) {
+function DiffBody({ rows }: { rows: DiffRow[] }) {
+  return (
+    <pre className="pw-ioText pw-diff" style={{ margin: "6px 0 0", fontFamily: "var(--ds-font-family-code)", fontSize: 11 }}>
+      {rows.map((r, i) => (
+        <span key={i} className={r.kind === "ctx" ? "pw-diff__ctx" : `pw-diff__${r.kind}`}>
+          {r.kind === "del" ? "-" : r.kind === "add" ? "+" : " "}{r.text}{"\n"}
+        </span>
+      ))}
+    </pre>
+  );
+}
+
+export function ToolCall({ call, state, readOnly = false }: { call: Block | null; state?: ToolStateView | undefined; readOnly?: boolean }) {
   const [open, setOpen] = useState(false);
   const name = String(call?.name ?? state?.toolName ?? "tool");
   const icon = TOOL_ICON[name] ?? "sparkle";
-  const title = TOOL_TITLE[name] ?? name;
+  const title = toolTitle(name);
   const args = useMemo(() => argsOf(call, state), [call, state]);
+  // In a file mirror, a call with no result never "ran": say that instead of spinning forever.
   const status = state?.state ?? "running";
+  const settledStatus = readOnly && status === "running" ? "abandoned" : status;
+  const noResult = readOnly && !state;
 
   const output = useMemo(() => {
     if (state?.outputContent?.length) return contentText(state.outputContent);
     if (state?.outputText) return state.outputText;
     return "";
   }, [state]);
-  const isError = status === "error" || (state as unknown as { isError?: boolean })?.isError === true;
+  const isError = settledStatus === "error" || (state as unknown as { isError?: boolean })?.isError === true;
   const edits = Array.isArray(args.edits) ? (args.edits as Block[]) : [];
   const hasBody = Boolean(output) || Object.keys(args).length > 0;
+  const dur = state?.durationMs != null ? toolDuration(state.durationMs) : "";
+  const sections: { label: string; body: React.ReactNode; error?: boolean }[] = [];
+
+  if (name === "bash" && args.command != null) sections.push({ label: "in", body: `$ ${String(args.command)}` });
+  if (name !== "bash" && !(name === "edit" || name === "str_replace_editor") && Object.keys(args).length > 0) {
+    sections.push({ label: "in", body: Object.entries(args).map(([k, v]) => `${k}: ${typeof v === "string" ? v : safeJson(v)}`).join("\n") });
+  }
+  if (output) sections.push({ label: "out", body: <span data-error={isError ? "true" : undefined}>{output}</span>, error: isError });
 
   return (
     <div className="pw-tool" data-tool={name}>
       <button className="pw-discRow pw-discRow--tool" onClick={() => hasBody && setOpen((o) => !o)} aria-expanded={open} disabled={!hasBody}>
-        <span className="pw-discLeading"><Leading state={status} icon={icon} /></span>
+        <span className="pw-discLeading"><Leading state={noResult ? "abandoned" : settledStatus} icon={icon} readOnly={readOnly} /></span>
         <span className="pw-discTitle">{title}</span>
         <span className="pw-discSep" />
-        <span className={`pw-discSummary${isError ? " pw-discSummary--error" : ""}`}>{toolSummary(name, args)}</span>
-        {state?.durationMs != null && <span className="pw-discSummary" style={{ flex: "none", marginLeft: 8 }}>{(state.durationMs / 1000).toFixed(1)}s</span>}
+        <span className={`pw-discSummary${isError ? " pw-discSummary--error" : ""}`}>
+          {noResult ? `${toolSummary(name, args) || title} — no result recorded` : toolSummary(name, args)}
+        </span>
+        {dur && <span className="pw-discSummary pw-discDuration" title={`${state?.durationMs} ms`}>{dur}</span>}
         {hasBody && <Icon name="chevron-down-outline" size={14} className="pw-discChevron" />}
       </button>
 
       {open && (
         <div style={{ display: "flex", flexDirection: "column" }}>
-          {name === "bash" && args.command != null && (
+          {/* One card with dividers for every tool, not one card per section (TOOL-02). */}
+          {(sections.length > 0 || edits.length > 0) && (
             <div className="pw-ioCard">
-              <div className="pw-ioSection">
-                <span className="pw-ioLabel">in</span>
-                <span className="pw-ioText">$ {String(args.command)}</span>
-              </div>
-              {output && (<><div className="pw-ioDivider" /><div className="pw-ioSection"><span className="pw-ioLabel">out</span><span className="pw-ioText">{output}</span></div></>)}
-            </div>
-          )}
-
-          {(name === "edit" || name === "str_replace_editor") && edits.length > 0 && (
-            <div className="pw-toolBlock">
-              {edits.map((e, i) => (
-                <div key={i} className="pw-toolBlock__item" style={{ display: "block" }}>
-                  <div className="pw-toolBlock__heading">
-                    <span className="pw-toolBlock__badge" data-tone="error">removed</span>
-                    <span className="pw-toolBlock__badge" data-tone="success">added</span>
+              {sections.map((s, i) => (
+                <div key={i}>
+                  {i > 0 && <div className="pw-ioDivider" />}
+                  <div className="pw-ioSection">
+                    <span className="pw-ioLabel">{s.label}</span>
+                    <span className={`pw-ioText${s.error ? "" : ""}`} data-error={s.error ? "true" : undefined}>{s.body}</span>
                   </div>
-                  <pre className="pw-ioText pw-diff" style={{ margin: "6px 0 0", fontFamily: "var(--ds-font-family-code)", fontSize: 11 }}>
-                    {DiffLines({ oldText: String((e as Block).oldText ?? ""), newText: String((e as Block).newText ?? "") })}
-                  </pre>
                 </div>
               ))}
-            </div>
-          )}
-
-          {name !== "bash" && !(name === "edit" && edits.length) && Object.keys(args).length > 0 && (
-            <div className="pw-ioCard">
-              <div className="pw-ioSection">
-                <span className="pw-ioLabel">in</span>
-                <span className="pw-ioText">{Object.entries(args).map(([k, v]) => `${k}: ${typeof v === "string" ? v : safeJson(v)}`).join("\n")}</span>
-              </div>
-            </div>
-          )}
-
-          {output && name !== "bash" && (
-            <div className="pw-ioCard">
-              <div className="pw-ioSection">
-                <span className="pw-ioLabel">out</span>
-                <span className="pw-ioText" data-error={isError ? "true" : undefined}>{output}</span>
-              </div>
+              {edits.length > 0 && (
+                <div className="pw-ioSection" style={{ display: "block" }}>
+                  <span className="pw-ioLabel">diff</span>
+                  {/* One legend for the whole card instead of one per edit block (TOOL-01). */}
+                  {edits.length > 0 && (
+                    <div className="pw-toolBlock__heading">
+                      <span className="pw-toolBlock__badge" data-tone="error">removed</span>
+                      <span className="pw-toolBlock__badge" data-tone="success">added</span>
+                    </div>
+                  )}
+                  {edits.map((e, i) => (
+                    <div key={i} className="pw-toolBlock__item">
+                      {edits.length > 1 && <div className="pw-toolBlock__heading"><span className="pw-toolBlock__badge">edit {i + 1}</span></div>}
+                      <DiffBody rows={diffLines(String((e as Block).oldText ?? ""), String((e as Block).newText ?? ""))} />
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
           {state?.truncated && <div className="pw-ioLabel" style={{ padding: "2px 4px" }}>output truncated by transport bound</div>}

@@ -10,7 +10,7 @@
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { MAX_FILE_VIEW_BYTES, type FileView } from "@piwebui/shared";
+import { MAX_FILE_PREVIEW_BYTES, MAX_FILE_VIEW_BYTES, type FileView } from "@piwebui/shared";
 import { ApiError } from "./commands.ts";
 
 const DENY_BASENAME = /^(\.env(\..*)?|id_rsa(\.pub)?|id_ed25519(\.pub)?|.*\.pem|auth\.json|\.netrc|\.npmrc)$/i;
@@ -103,7 +103,8 @@ export async function viewFile(root: string, relPath: string): Promise<FileView>
   let st: fs.Stats;
   try { st = await fsp.stat(full); } catch { throw new ApiError("not_found", "path not found"); }
   if (st.isDirectory()) {
-    const dirents = (await fsp.readdir(full, { withFileTypes: true })).slice(0, 500);
+    const all = await fsp.readdir(full, { withFileTypes: true });
+    const dirents = all.slice(0, 500);
     const entries: FileView["entries"] = [];
     for (const de of dirents) {
       entries.push({
@@ -112,18 +113,21 @@ export async function viewFile(root: string, relPath: string): Promise<FileView>
         sizeBytes: de.isFile() ? fs.statSync(path.join(full, de.name)).size : null,
       });
     }
-    return { kind: "directory", path: path.relative(root, full), sizeBytes: st.size, entries };
+    // Say so: a capped listing that looks complete is worse than an honest "showing first 500".
+    return { kind: "directory", path: path.relative(root, full), sizeBytes: st.size, entries, truncated: all.length > dirents.length };
   }
   if (st.size > MAX_FILE_VIEW_BYTES) return { kind: "too_large", path: path.relative(root, full), sizeBytes: st.size };
   const fh = await fsp.open(full, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
   try {
     const st2 = await fh.stat();
     if (st2.ino !== st.ino || st2.size !== st.size) throw new ApiError("forbidden", "file changed during read; retry");
-    const buf = Buffer.alloc(Math.min(st2.size, MAX_FILE_VIEW_BYTES));
+    // Preview-sized read: a 2 MB log used to be shipped and injected in full (PERF-05).
+    const want = Math.min(st2.size, MAX_FILE_PREVIEW_BYTES);
+    const buf = Buffer.alloc(want);
     const { bytesRead } = await fh.read(buf, 0, buf.length, 0);
     const slice = buf.subarray(0, bytesRead);
     if (slice.subarray(0, 8000).includes(0)) return { kind: "binary", path: path.relative(root, full), sizeBytes: st2.size };
-    return { kind: "text", path: path.relative(root, full), sizeBytes: st2.size, text: slice.toString("utf8"), truncated: false };
+    return { kind: "text", path: path.relative(root, full), sizeBytes: st2.size, text: slice.toString("utf8"), truncated: bytesRead < st2.size };
   } finally {
     await fh.close();
   }

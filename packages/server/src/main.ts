@@ -16,12 +16,14 @@ import fs from "node:fs";
 import http from "node:http";
 import https from "node:https";
 import path from "node:path";
+import { brotliCompressSync, constants as zlibConstants, gzipSync } from "node:zlib";
 import { fileURLToPath } from "node:url";
 import os from "node:os";
 import crypto from "node:crypto";
 import { spawn } from "node:child_process";
 import { resolvePiPackage } from "@piwebui/pi-adapter";
-import { loadConfig, AuthService, saveConfigDir, type Config } from "./auth.ts";
+import { TESTED_PI_VERSIONS, allowedPiVersions, isPiVersionAllowed } from "@piwebui/shared";
+import { loadConfig, AuthService, saveConfigDir, type BridgeModeName, type Config } from "./auth.ts";
 import { Store } from "./store.ts";
 import { ReadClient } from "./readClient.ts";
 import { StreamHub } from "./hub.ts";
@@ -32,9 +34,29 @@ import { CommandDispatcher, shellEscape } from "./commands.ts";
 import { buildServer } from "./http.ts";
 import { registerRoutes, type AppCtx } from "./routes.ts";
 import { BridgeDiscovery, type BridgeHandle } from "./drivers.ts";
+import { BridgeServer, type HelloFrame } from "./bridgeServer.ts";
+import { wireBridge, type BridgeWire } from "./bridgeWire.ts";
+import { bridgeSocketPath, processStartMs, writeDescriptor, readDescriptor, descriptorPath, removeDescriptorSocket } from "./descriptor.ts";
 import { logInfo } from "./log.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
+
+/** `--bridge-mode` beats config beats the default (`dial`). */
+function resolveBridgeMode(flags: Record<string, string | boolean>, cfg: Config): BridgeModeName {
+  const raw = flags["bridge-mode"] ? String(flags["bridge-mode"]) : cfg.bridge?.mode ?? "dial";
+  const mode = raw.toLowerCase() as BridgeModeName;
+  return (["dial", "legacy", "both", "off"] as string[]).includes(mode) ? mode : "dial";
+}
+
+function bridgeListenerLabel(bridge: BridgeServer, disabled: boolean): string {
+  if (disabled) return "disabled";
+  const n = bridge.connections().length;
+  return `dial listener on ${bridge.socketPath} (${n} runtime${n === 1 ? "" : "s"} connected)`;
+}
+
+function safeReaddir(dir: string): string[] {
+  try { return fs.readdirSync(dir); } catch { return []; }
+}
 
 function parseFlags(argv: string[]): Record<string, string | boolean> {
   const out: Record<string, string | boolean> = {};
@@ -59,8 +81,14 @@ const HELP = `pi-web — local web UI for pi sessions (no login: open the URL an
   pi-web workspaces             list allowlisted workspaces
   pi-web mint-token [--name n]  print a long-lived API bearer token
   pi-web revoke-token --id ID   revoke an API token
-  pi-web install-bridge         install the terminal-bridge pi extension
-  pi-web print-bridge-command   exact env + \`pi -e\` command for a terminal session
+  pi-web install-extension      copy the terminal bridge into ~/.pi/agent/extensions (prefer pi install)
+  pi-web install-bridge         (deprecated alias of install-extension)
+  pi-web doctor [--json]        why is my terminal pi not live in the browser?
+  pi-web rotate-bridge-token    new bridge secret + descriptor rewrite
+  pi-web trust-runtime <id>     allow a runtime that was revoked (or when autoTrust=false)
+  pi-web revoke-runtime <id>    drop and distrust a runtime now
+  pi-web pair                   env line for bridging a pi on another host over an ssh tunnel
+  pi-web deprecate-bridge       what changed in the bridge transport, and the cleanup command
 
 Serve flags (bare \`pi-web\` and \`pi-web serve\` take the same flags):
   --port <n>        listen port; pass 0 to let the OS pick a free one (default 4319)
@@ -71,9 +99,16 @@ Serve flags (bare \`pi-web\` and \`pi-web serve\` take the same flags):
   --tls-cert/--tls-key  serve HTTPS with an existing PEM pair (must be given together)
   --no-open         print the URL instead of opening the default browser
                     (also PIWEB_NO_OPEN=1; forced off over SSH or on non-loopback binds)
+  --bridge-mode <m> dial (default) | both | legacy | off - how terminal pis connect
+  --bridge-socket <path>  override the bridge socket (default <data-dir>/bridge-<serverId>.sock)
+  --no-attest       accept bridges without verifying their pid is a live pi (not recommended)
 
 Environment: PIWEB_PORT PIWEB_BIND PIWEB_DATA_DIR PIWEB_HOSTS_ALLOW PIWEB_ORIGINS_ALLOW
              PIWEB_AGENT_DIR PIWEB_TLS_CERT PIWEB_TLS_KEY PIWEB_MAX_MANAGED PIWEB_NO_OPEN
+             PIWEB_BRIDGE_MODE PIWEB_BRIDGE_DISABLE PIWEB_BRIDGE_ATTEST PIWEB_BRIDGE_AUTO_TRUST
+             PIWEB_BRIDGE_ALLOW_CWD PIWEB_BRIDGE_TRUST_SESSION_DIRS PIWEB_ALLOW_PI_VERSIONS
+             Terminal side: PIWEB_BRIDGE_DISABLE PIWEB_BRIDGE_FILE PIWEB_BRIDGE_MODES
+             PIWEB_BRIDGE_MAX_SERVERS PIWEB_BRIDGE_DEBUG
 
   pi-web --version | --help
 
@@ -84,6 +119,7 @@ Environment: PIWEB_PORT PIWEB_BIND PIWEB_DATA_DIR PIWEB_HOSTS_ALLOW PIWEB_ORIGIN
 const KNOWN_FLAGS = new Set([
   "port", "bind", "data-dir", "host-allow", "origins-allow", "agent-dir", "tls-cert", "tls-key",
   "open", "no-open", "name", "id", "help", "h", "version", "v", "V",
+  "bridge-mode", "bridge-socket", "no-attest", "json", "ttl",
 ]);
 
 /** Flag names in argv that this CLI does not know (\"--pot 5000\" would otherwise be ignored). */
@@ -91,8 +127,7 @@ function unknownFlags(argv: string[]): string[] {
   return argv.filter((a) => a.startsWith("--") && !KNOWN_FLAGS.has(a.slice(2)));
 }
 
-/** Version of the installed @piwebui/pi-web package (works packed and in a checkout). */
-export function packageVersion(): string {
+/** Version of the installed @piwebui/pi-web package (works packed and in a checkout). */export function packageVersion(): string {
   try {
     const pkg = JSON.parse(fs.readFileSync(path.join(HERE, "..", "package.json"), "utf8")) as { version?: string };
     return pkg.version ?? "0.0.0";
@@ -184,6 +219,38 @@ const MIME: Record<string, string> = {
   ".map": "application/json",
 };
 
+/** Text-ish assets worth compressing on the fly (woff2/png are already compressed). */
+const COMPRESSIBLE = new Set([".html", ".js", ".css", ".json", ".svg", ".map", ".txt"]);
+const MIN_COMPRESS_BYTES = 860;
+/** path -> { mtime, encoding -> body }, so a rebuild invalidates without a restart. */
+const encodedCache = new Map<string, { mtimeMs: number; variants: Map<string, Buffer> }>();
+
+function pickEncoding(accept: string, ext: string): "br" | "gzip" | null {
+  if (!COMPRESSIBLE.has(ext)) return null;
+  const a = accept.toLowerCase();
+  if (a.includes("br")) return "br";
+  if (a.includes("gzip")) return "gzip";
+  return null;
+}
+
+function compressBody(full: string, raw: Buffer, st: fs.Stats, enc: "br" | "gzip"): Buffer | null {
+  if (raw.length < MIN_COMPRESS_BYTES) return null;
+  let entry = encodedCache.get(full);
+  if (!entry || entry.mtimeMs !== st.mtimeMs) {
+    entry = { mtimeMs: st.mtimeMs, variants: new Map() };
+    encodedCache.set(full, entry);
+  }
+  const hit = entry.variants.get(enc);
+  if (hit !== undefined) return hit;
+  const body = enc === "br"
+    ? brotliCompressSync(raw, { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 5 } })
+    : gzipSync(raw, { level: 6 });
+  // Only keep and use it when it actually pays off.
+  const out = body.length < raw.length ? body : null;
+  entry.variants.set(enc, out ?? Buffer.alloc(0));
+  return out;
+}
+
 function serveStatic(app: ReturnType<typeof buildServer>, dir: string) {
   app.get("/boot/theme.js", async (_req, reply) => {
     reply.header("content-type", MIME[".js"]);
@@ -200,9 +267,22 @@ function serveStatic(app: ReturnType<typeof buildServer>, dir: string) {
     let st: fs.Stats;
     try { st = fs.statSync(full); } catch { st = null as never; }
     if (st && st.isFile()) {
-      reply.header("content-type", MIME[path.extname(full)] ?? "application/octet-stream");
+      const ext = path.extname(full);
+      reply.header("content-type", MIME[ext] ?? "application/octet-stream");
       reply.header("cache-control", rel.startsWith("assets/") ? "public, max-age=31536000, immutable" : "no-cache");
-      return reply.send(fs.readFileSync(full));
+      const raw = fs.readFileSync(full);
+      // The bundle is ~550 KB and a documented deployment is an SSH tunnel, so answer with a
+      // content-encoding whenever the client can take one (brotli preferred).
+      const enc = pickEncoding(String(req.headers["accept-encoding"] ?? ""), ext);
+      if (enc) {
+        const body = compressBody(full, raw, st, enc);
+        if (body) {
+          reply.header("content-encoding", enc);
+          reply.header("vary", "Accept-Encoding");
+          return reply.send(body);
+        }
+      }
+      return reply.send(raw);
     }
     // SPA fallback
     const index = path.join(dir, "index.html");
@@ -243,15 +323,57 @@ export async function serve(flags: Record<string, string | boolean>) {
     },
   });
 
-  // ---- bridge discovery ----
+  // ---- terminal bridge: the server listens, terminal pis dial (D-1) ----
+  const bridgeMode = resolveBridgeMode(flags, cfg);
+  const bridgeDisabled = bridgeMode === "off" || process.env.PIWEB_BRIDGE_DISABLE === "1";
   const bridgeDir = path.join(cfg.dataDir, "bridges");
-  const bridges = new BridgeDiscovery(
+  const socketPath = flags["bridge-socket"] ? String(flags["bridge-socket"]) : bridgeSocketPath(cfg.dataDir, auth.serverId());
+  if (Buffer.byteLength(socketPath, "utf8") > 100) {
+    fatal(`bridge socket path is too long for a unix socket (${socketPath.length} chars): use a shorter --data-dir or pass --bridge-socket <short-path>`);
+  }
+  const bridge = new BridgeServer({
+    dataDir: cfg.dataDir,
+    serverId: auth.serverId(),
+    token: auth.bridgeToken(),
+    socketPath,
+    mode: bridgeDisabled ? "off" : bridgeMode,
+    requireAttestation: cfg.bridge?.requireAttestation !== false && !flags["no-attest"],
+    autoTrust: cfg.bridge?.autoTrust !== false,
+    allowCwd: cfg.bridge?.allowCwd,
+    store,
+    onAttach: (conn, hello) => wire.onAttach(conn, hello),
+    onAdvertise: (conn, hello) => wire.onAdvertise(conn, hello),
+    onGone: (conn, reason) => wire.onGone(conn, reason),
+  });
+
+  const wire: BridgeWire = wireBridge({
+    sessions,
+    ops,
+    store,
+    serverId: auth.serverId(),
+    listener: () => ({ mode: bridgeMode, socketPath: bridge.socketPath, listener: bridgeListenerLabel(bridge, bridgeDisabled), rejects: bridge.stats.rejected }),
+    versionGate: () => ({
+      serverPiVersion: piPkg?.version ?? null,
+      validated: [...TESTED_PI_VERSIONS],
+      allowedByConfig: allowedPiVersions(),
+      verdict: piPkg?.version && isPiVersionAllowed(piPkg.version) ? "writable" : "read-only until validated or allowlisted",
+    }),
+    legacyCount: () => legacyDiscovery.handlesSnapshot().length,
+    legacyInfo: () => ({
+      dir: bridgeDir,
+      records: safeReaddir(bridgeDir).filter((f) => f.endsWith(".json")).length,
+      note: "legacy discovery polls <dataDir>/bridges every 3 s; the dial transport is preferred",
+    }),
+  });
+
+  // Legacy transport (pre-1.0): the server dials each terminal pi's own socket. Kept for one
+  // release so an existing `PIWEB_BRIDGE_*` setup keeps working (H-18); the dial connection wins
+  // when both exist because adoption refuses a second owner for one session.
+  const legacyDiscovery = new BridgeDiscovery(
     bridgeDir,
     auth.bridgeToken(),
-    (handle: BridgeHandle) => attachBridge(handle),
+    (handle: BridgeHandle) => attachLegacyBridge(handle),
     (handle: BridgeHandle) => {
-      const rec = sessions.byKey.get(handle.runtimeId);
-      void rec;
       for (const r of sessions.byKey.values()) {
         if (r.driver === handle) {
           r.driver = null;
@@ -266,34 +388,21 @@ export async function serve(flags: Record<string, string | boolean>) {
     },
   );
 
-  function attachBridge(handle: BridgeHandle) {
-    const filePath = handle.sessionFile ? fs.existsSync(handle.sessionFile) ? handle.sessionFile : null : null;
-    let rec = filePath ? sessions.byPath.get(filePath) : undefined;
-    if (!rec && filePath) {
-      rec = sessions.ensureFromFileNoWatch(filePath);
-      rec.kind = "bridged";
-    }
-    if (!rec) {
-      // Session not flushed to disk yet: register a bridged placeholder keyed by runtime id.
-      rec = sessions.blankRec("b_" + handle.runtimeId, null, "bridged");
-      rec.meta.cwd = handle.cwd;
-      sessions.byKey.set(rec.key, rec);
-    }
-    if (rec.driver && rec.driver !== handle) {
-      // A second bridge claiming the same file: refuse duplicate live ownership.
-      handle.dispose("duplicate owner refused");
-      return;
-    }
-    rec.driver = handle;
-    handle.onEvent((ev) => {
-      sessions.applyDriverEvent(rec!, ev);
-      if (ev.name === "session_start" && handle.sessionFile && rec!.path !== handle.sessionFile) {
-        sessions.byPath.delete(rec!.path ?? "");
-        rec!.path = handle.sessionFile;
-        rec!.meta.path = handle.sessionFile;
-        sessions.byPath.set(handle.sessionFile, rec!);
-      }
+  function attachLegacyBridge(handle: BridgeHandle) {
+    const hello = (handle.hello ?? {}) as Partial<HelloFrame>;
+    const filePath = handle.sessionFile && fs.existsSync(handle.sessionFile) ? handle.sessionFile : null;
+    const sessionId = String(hello.sessionId ?? handle.runtimeId);
+    const { rec } = sessions.adoptBridge(handle as never, {
+      runtimeId: handle.runtimeId,
+      sessionId,
+      sessionFile: filePath ?? handle.sessionFile ?? null,
+      cwd: handle.cwd,
+      piVersion: handle.piVersion,
+      sessionGeneration: Number(hello.sessionGeneration ?? 1),
+      capabilities: handle.capabilities,
     });
+    if (!rec.driver) return; // a dial connection already owns this session
+    handle.onEvent((ev) => sessions.applyDriverEvent(rec, ev));
     handle.onDead(() => {
       if (rec!.driver === handle) {
         rec!.driver = null;
@@ -303,18 +412,18 @@ export async function serve(flags: Record<string, string | boolean>) {
         hub.emit(rec!.key, "resync", { reason: "bridge_lost" });
       }
     });
-    // Adopt terminal metadata via one snapshot pull (non-fatal if it fails).
     void handle.cmd("snapshot", {}, 8000).then((snap) => {
       sessions.mergeOwnerSnapshot(rec!, snap as Record<string, unknown>);
       hub.emit(rec!.key, "ownerChanged", { runtime: sessions.identity(rec!), mode: sessions.mode(rec!) });
       hub.emit(rec!.key, "resync", { reason: "owner_attached" });
-    }).catch(() => { /* attach anyway; users can refresh */ });
+    }).catch(() => { /* attach anyway; the next event refreshes state */ });
   }
 
   const app = buildServer(cfg, auth);
   const ctx: AppCtx = {
     cfg, auth, store, read, hub, sessions, control, ops, dispatcher,
-    bridges: bridges as never,
+    bridge, wire, legacyBridges: legacyDiscovery as never,
+    bridgeMode,
     piPkg: { version: piPkg?.version ?? null, path: piPkg?.entry ?? null },
     serverId: auth.serverId(),
     startedAt: Date.now(),
@@ -355,11 +464,29 @@ export async function serve(flags: Record<string, string | boolean>) {
       if (!cfg.originsAllow.includes(origin)) cfg.originsAllow.push(origin);
     }
   }
-  bridges.start();
+  // The bridge listener starts with the HTTP listener: no terminal pi can dial a socket that
+  // belongs to a server that is not answering yet.
+  let descriptorInfo: ReturnType<typeof writeDescriptor> | null = null;
+  if (!bridgeDisabled) {
+    const up = await bridge.listen();
+    if (!up.ok) {
+      fatal(`something already answers on ${socketPath} - another pi-web (or a server that died holding it). Start this one on another --data-dir, or pass --bridge-socket <path>.`);
+    }
+    descriptorInfo = writeDescriptor({
+      dataDir: cfg.dataDir,
+      serverId: ctx.serverId,
+      socket: socketPath,
+      token: auth.bridgeToken(),
+      http: `${scheme}://${isLoopbackBind(cfg.bind) ? cfg.bind : "localhost"}:${boundPort}`,
+      piwebVersion: packageVersion(),
+    });
+    logInfo("bridge_descriptor_written", { path: descriptorInfo.path, pointer: descriptorInfo.pointerPath ?? "default dir" });
+  }
+  if (!bridgeDisabled && (bridgeMode === "legacy" || bridgeMode === "both")) legacyDiscovery.start();
   setInterval(() => ops.sweep(), 3600_000).unref?.();
 
-  // Access banner (terminal only).
-  const token = auth.bridgeToken();
+  // Access banner (terminal only). The bridge token is never printed: it lives in the
+  // 0600 descriptor, and printing it puts it in shell history, CI logs and screen shares (B-13).
   const base = `${scheme}://${isLoopbackBind(cfg.bind) ? cfg.bind : "localhost"}:${boundPort}`;
   if (!isLoopbackBind(cfg.bind) && !cfg.tls) {
     process.stderr.write(`pi-web: listening on ${cfg.bind} over plain HTTP; anyone who can reach that address can drive pi. Prefer a loopback bind behind a proxy you own.\n`);
@@ -375,17 +502,23 @@ export async function serve(flags: Record<string, string | boolean>) {
       ? [`  Browser opened at ${base}/ - your sessions load straight away, no sign-in.`]
       : [`  Open ${base}/ in a browser.   (no browser launched: ${blocker})`]),
     "",
-    "  To let a TERMINAL pi be controlled from the browser, start it with the bridge:",
-    `    PIWEB_BRIDGE_TOKEN=${token} \\`,
-    `    PIWEB_BRIDGE_DIR=${bridgeDir} \\`,
-    `    pi -e ${bridgeExtensionPathFor(piPkg)}`,
-    "  (Existing pi processes pick the bridge up only at an idle /reload or next start.)",
+    ...(bridgeDisabled
+      ? ["  Terminal control: the bridge is OFF (--bridge-mode off or PIWEB_BRIDGE_DISABLE=1)."]
+      : [
+        "  Terminal control: install once, then just run pi:",
+        "    pi install npm:@piwebui/pi-web-bridge",
+        `  bridge: ${bridgeListenerLabel(bridge, false)} · ${socketPath}`,
+        `  descriptor: ${descriptorInfo?.path ?? "(not written)"}`,
+        "  A running terminal pi picks the bridge up on its next /reload or start.",
+      ]),
     "",
   ].join("\n") + "\n");
-  logInfo("server_start", { port: boundPort, bind: cfg.bind, opened_browser: opened });
+  logInfo("server_start", { port: boundPort, bind: cfg.bind, opened_browser: opened, bridge_mode: bridgeMode });
 
   const shutdown = async () => {
-    bridges.stop();
+    legacyDiscovery.stop();
+    bridge.close();
+    if (!bridgeDisabled) removeDescriptorSocket(socketPath);
     for (const rec of sessions.byKey.values()) {
       if (rec.driver && rec.kind === "managed") { (rec.driver as { markIntentionalExit?: () => void }).markIntentionalExit?.(); rec.driver.dispose("server shutdown"); }
       sessions.stopWatch(rec);
@@ -401,11 +534,19 @@ export async function serve(flags: Record<string, string | boolean>) {
   return app;
 }
 
-/** The path printed when the browser could not be handed the URL. */
-function bridgeExtensionPathFor(_piPkg: ReturnType<typeof resolvePiPackage>): string {
-  const src = path.join(HERE, "..", "..", "pi-adapter", "src", "bridge", "extension.mjs");
-  const dist = path.join(HERE, "..", "..", "pi-adapter", "dist", "bridge", "extension.mjs");
-  return fs.existsSync(dist) ? dist : src;
+/**
+ * Where the bridge extension file actually lives: the workspace checkout first (dev), then the
+ * copy staged into the published server package (`bridge-extension/`, see
+ * scripts/stage-bridge-extension.mts). Never the legacy `.mjs`.
+ */
+function bridgeExtensionPathFor(_piPkg: ReturnType<typeof resolvePiPackage>): string | null {
+  const candidates = [
+    path.join(HERE, "..", "..", "pi-extension", "extensions", "pi-web-bridge.js"),
+    path.join(HERE, "..", "bridge-extension", "pi-web-bridge.js"),
+    path.join(HERE, "bridge-extension", "pi-web-bridge.js"),
+  ];
+  for (const c of candidates) if (fs.existsSync(c)) return c;
+  return null;
 }
 
 /* ---------------- CLI subcommands ---------------- */
@@ -452,25 +593,78 @@ export async function runCli(argv: string[] = process.argv.slice(2)): Promise<vo
     const canon = fs.realpathSync(path.resolve(p));
     if (!fs.statSync(canon).isDirectory()) { console.error("not a directory"); process.exit(2); }
     const key = "w_" + crypto.randomBytes(6).toString("hex");
-    store.db.prepare("INSERT INTO workspaces(key,path,label,added_at) VALUES(?,?,?,?) ON CONFLICT(path) DO NOTHING").run(key, canon, canon, new Date().toISOString());
+    store.db.prepare("INSERT INTO workspaces(key,path,label,added_at) VALUES(?,?,?,?) ON CONFLICT(path) DO NOTHING").run(key, canon, path.basename(canon), new Date().toISOString());
     const row = store.db.prepare("SELECT key FROM workspaces WHERE path=?").get(canon) as { key: string } | undefined;
     console.log(`workspace allowed: ${canon} (${row?.key ?? key})`);
+    console.log("A running pi-web picks this up on its next list refresh; no restart needed.");
   } else if (cmd === "workspaces") {
     const rows = store.db.prepare("SELECT key,path FROM workspaces ORDER BY added_at").all() as { key: string; path: string }[];
     for (const r of rows) console.log(`${r.key}\t${r.path}`);
     if (!rows.length) console.log("(no workspaces: pi-web allow <dir>)");
-  } else if (cmd === "install-bridge") {
+  } else if (cmd === "install-extension" || cmd === "install-bridge") {
+    if (cmd === "install-bridge") console.log("note: `install-bridge` is deprecated; use `install-extension` (or `pi install npm:@piwebui/pi-web-bridge`).\n");
     const agentDir = String(flags["agent-dir"] ?? process.env.PI_CODING_AGENT_DIR ?? path.join(os.homedir(), ".pi", "agent"));
     const extDir = path.join(agentDir, "extensions");
     fs.mkdirSync(extDir, { recursive: true });
     const src = bridgeExtensionPathFor(null);
-    const dest = path.join(extDir, "pi-web-bridge.mjs");
+    if (!src) { console.error("pi-web: the bridge extension file was not found in this install; use `pi install npm:@piwebui/pi-web-bridge` instead."); process.exit(1); }
+    const dest = path.join(extDir, "pi-web-bridge.js");
     fs.copyFileSync(src, dest);
-    console.log(`Installed bridge extension to ${dest}`);
-    console.log("Existing terminal Pi processes load it at the next idle /reload; new pi starts load it automatically.");
-    console.log("You must start pi with PIWEB_BRIDGE_TOKEN and PIWEB_BRIDGE_DIR set (see server banner / README).");
+    let removed = "";
+    for (const legacyName of ["pi-web-bridge.mjs"]) {
+      const legacy = path.join(extDir, legacyName);
+      // A `.mjs` file is never auto-discovered by pi: leaving it behind means two copies of the
+      // bridge in one process and a very confusing "it stopped working" story.
+      try { fs.unlinkSync(legacy); removed = legacy; } catch { /* nothing to clean */ }
+    }
+    console.log(`Installed the bridge extension to ${dest}`);
+    if (removed) console.log(`Removed the legacy (never loaded) copy at ${removed}`);
+    console.log("No token, no environment variables: pi-web publishes its descriptor and the bridge finds it.");
+    console.log("Preferred instead (self-updating, discoverable):  pi install npm:@piwebui/pi-web-bridge");
+    console.log("An already-running pi loads it at the next idle /reload or at its next start.");
+  } else if (cmd === "deprecate-bridge") {
+    console.log([
+      "The terminal bridge changed in 1.0: the bridge now dials pi-web instead of pi-web dialing each pi.",
+      "Nothing to configure: pi-web publishes " + descriptorPath(cfg.dataDir) + " (0600) and the bridge reads it.",
+      "If you set PIWEB_BRIDGE_TOKEN/PIWEB_BRIDGE_DIR by hand, you can drop them; the old transport still",
+      "works for one more release via `pi-web --bridge-mode both`, and disappears after that.",
+      "Uninstall the legacy copy: rm ~/.pi/agent/extensions/pi-web-bridge.mjs",
+    ].join("\n"));
   } else if (cmd === "print-bridge-command") {
-    console.log(`PIWEB_BRIDGE_TOKEN=${auth.bridgeToken()} PIWEB_BRIDGE_DIR=${path.join(cfg.dataDir, "bridges")} pi -e ${bridgeExtensionPathFor(null)}`);
+    // The token is no longer printed (B-13): the descriptor is the handoff.
+    console.log(`pi -e ${bridgeExtensionPathFor(null) ?? "@piwebui/pi-web-bridge"}`);
+    console.log(`# zero-config: pi-web already published ${descriptorPath(cfg.dataDir)}`);
+  } else if (cmd === "rotate-bridge-token") {
+    const next = auth.rotateBridgeToken();
+    const socketPath = flags["bridge-socket"] ? String(flags["bridge-socket"]) : bridgeSocketPath(cfg.dataDir, auth.serverId());
+    writeDescriptor({
+      dataDir: cfg.dataDir, serverId: auth.serverId(), socket: socketPath, token: next,
+      http: `http://${cfg.bind}:${cfg.port}`, piwebVersion: packageVersion(),
+    });
+    console.log("New bridge token written to " + descriptorPath(cfg.dataDir) + " (never printed).");
+    console.log("A running pi-web still holds the old token in memory: restart it, or POST /api/v1/bridge/rotate-token.");
+    console.log("Bridges reconnect on their own within their retry window (<= 15 s).");
+  } else if (cmd === "trust-runtime") {
+    const id = argv[1];
+    if (!id) { console.error("usage: pi-web trust-runtime <runtimeId>"); process.exit(2); }
+    const row = store.runtimeGet(id);
+    if (!row) { console.error(`unknown runtimeId ${id} (seen them with: pi-web doctor)`); process.exit(1); }
+    store.runtimeSetTrusted(id, true);
+    console.log(`trusted runtime ${id}`);
+  } else if (cmd === "revoke-runtime") {
+    const id = argv[1];
+    if (!id) { console.error("usage: pi-web revoke-runtime <runtimeId>"); process.exit(2); }
+    const changed = store.runtimeSetTrusted(id, false);
+    console.log(changed ? `revoked runtime ${id}; it cannot connect until you trust it again` : `unknown runtimeId ${id}`);
+  } else if (cmd === "pair") {
+    // Documentation aid for the ssh -L story, not the zero-config path.
+    const d = readDescriptor(descriptorPath(cfg.dataDir));
+    if (!d.ok) { console.error(`no usable descriptor at ${descriptorPath(cfg.dataDir)} (${d.reason}): start pi-web there first`); process.exit(1); }
+    console.log(`PIWEB_BRIDGE_SOCKET=${d.descriptor.socket} PIWEB_BRIDGE_TOKEN=${d.descriptor.token} pi -e @piwebui/pi-web-bridge`);
+    console.log(`# copy bridge.json to the other host (0600!) and forward ${d.descriptor.socket} over ssh -L/-R; ttl is until you rotate the token.`);
+  } else if (cmd === "doctor") {
+    const { runDoctor } = await import("./doctor.ts");
+    process.exitCode = await runDoctor({ dataDir: cfg.dataDir, json: Boolean(flags.json) });
   } else {
     process.stderr.write(`unknown command: ${cmd}\n\n${HELP}`);
     process.exit(2);

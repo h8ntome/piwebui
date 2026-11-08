@@ -12,6 +12,70 @@ releases are back-filled below — each release cut replaces the `Unreleased` se
 
 ### Added
 
+- **`@piwebui/pi-web-bridge`: a terminal `pi` is live in the browser with zero configuration.**
+  Install it once (`pi install npm:@piwebui/pi-web-bridge`) and every `pi` you start afterwards —
+  in any project, with no environment variables, no `pi -e`, no `piweb allow` and no restart of an
+  already-running `pi` — appears as `Terminal (bridged)` within ~2 s, streams thinking/tool calls/
+  tool output/token-by-token answers, and accepts browser prompts, steering, abort, rename, model and
+  thinking changes. `/new`, `/resume`, `/fork` and `/reload` keep all of it working. The design (and
+  the audit that produced it) is in `bridge_plan/`; the user-facing notes are in
+  `packages/pi-extension/README.md`.
+  - **The direction reversed: the terminal dials the server.** Each `pi-web` publishes a `0600`
+    descriptor (`<dataDir>/bridge.json`) and listens on one Unix socket per server
+    (`bridge-<serverId>.sock`); bridges find it through a documented search order
+    (`PIWEB_BRIDGE_DISABLE` → `PIWEB_BRIDGE_FILE` → inline socket+token → `PIWEB_DATA_DIR` →
+    sibling-of-`PI_CODING_AGENT_DIR` → `~/.pi-web/bridge.json` → `~/.pi-web/servers/*.json` pointers).
+    The stale-record / wrong-dir / wrong-token class of failures is gone because the bridge now
+    writes nothing to disk at all.
+  - **Identity is pi's `sessionId`**, not a file path, so a session that has no file yet (pi
+    pre-allocates the path) is adoptable and shows as `live` instead of a `read-only` mirror twin.
+  - **Acceptance is attested.** Token + `0600` file modes + process attestation (the claimed `pid`
+    must be a live Pi CLI started within ±5 s of the claimed time) + a revocable runtime table.
+    `pi-web trust-runtime` / `revoke-runtime`, `PIWEB_BRIDGE_DISABLE`, `--bridge-mode`,
+    `--no-attest` and `bridge.allowCwd` are the knobs; `SECURITY.md` states the same-uid boundary.
+  - **Presence and diagnosis.** `GET /api/v1/events` (server-wide SSE: `runtimeAttached`,
+    `sessionAppeared`, `runtimeGone`, `sessionRetired`), `GET /api/v1/runtimes`,
+    `GET /api/v1/bridge/diagnose`, `pi-web doctor [--json]`, a `● pi-web` footer status in `pi` and
+    a `/piweb` command. The client subscribes to the global stream, so a tab learns about a new
+    terminal session by itself.
+  - **Ordering, replay, backpressure.** Per-runtime monotonic `seq`, a bounded replay ring
+    (2000 frames / 4 MiB) that resumes a reconnect without a full resnapshot, and an explicit drop
+    policy (previews first, tool output next, never `turn_end`/`agent_*`/`session_*`) with counters
+    visible in `/api/v1/runtimes` and `/piweb`.
+  - `pi-web install-extension` (copy-only installer, deletes the legacy `pi-web-bridge.mjs`),
+    `pi-web rotate-bridge-token`, `pi-web pair`, `pi-web deprecate-bridge`.
+- **Every package now updates on npm automatically, the bridge included.** `scripts/publish-list.mts`
+  is the single derived source of the publishable set (every non-private workspace, in dependency
+  order) and `release.yml` feeds it to the version gate, the tag check, the registry preflight, the
+  canary stamp and the publish loop — the bridge was being left out precisely because that list was
+  written out by hand in six places. `verify-published.mts --all` closes the far end of the loop:
+  each publishable package must exist at the released version, must have its dist-tag pointing at
+  it, and must ship the entry points its manifest advertises (the bridge's `pi.extensions` file).
+  `scripts/test/publish-list.test.mts` fails the build if the list, the manifests and the workflow
+  ever disagree, and `npm run publish:list` prints what CI will publish. A package npm refuses
+  because its trusted publisher is not registered yet (the state of any freshly created package) is
+  now skipped with a warning instead of aborting the loop, so it can no longer freeze the registry
+  updates of every other package — the run still ends red, naming the package and the fix.
+
+### Changed
+
+- **`install-bridge` is deprecated in favour of `install-extension` / `pi install`.** The old
+  installer wrote `pi-web-bridge.mjs`, a file pi never auto-discovers (only `.ts`/`.js`), which is
+  the whole reason the bridge appeared not to work. `install-bridge` now installs the `.js` and
+  removes the `.mjs`, with a note pointing at `pi install`.
+- **The server banner no longer prints the bridge token** (it landed in shell history, CI logs and
+  screen shares). It prints the one-line install command and the runtime count instead.
+- **The pi version gate is loud instead of silent.** Writes stay fail-closed on an unvalidated pi,
+  but `status.compat.detail`, `GET /api/v1/capabilities`, the sidebar and `pi-web doctor` now name
+  the escape hatch `PIWEB_ALLOW_PI_VERSIONS=<version>`.
+- Legacy registry transport (`PIWEB_BRIDGE_DIR` + `PIWEB_BRIDGE_TOKEN`) is still supported for one
+  release behind `--bridge-mode both`; the dial connection wins when both exist, so one `pi` is
+  never two drivers.
+- `e2e/bridge-smoke.mts` (`npm run smoke:bridge`) runs the definition-of-done end to end: a real
+  `pi` in its own pty with the mock provider, a real `pi-web` started like a user starts it, the
+  bridge installed like a user installs it, and 27 assertions covering attach latency, streaming,
+  browser prompts, `/new`, `kill -9` and `doctor`.
+
 - **One-command launch.** `pi-web` with no subcommand starts the server and opens the default browser
   straight onto the session list, mirroring how `dsh web` starts the DeepSeek harness. `--no-open` /
   `PIWEB_NO_OPEN=1` opt out; the

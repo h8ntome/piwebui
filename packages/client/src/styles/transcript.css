@@ -23,15 +23,23 @@
 .pw-userAtt { flex-wrap: wrap; justify-content: flex-end; gap: 8px; max-width: 100%; display: flex; }
 
 /* assistant */
+.pw-turn { position: relative; }
 .pw-answer { font-size: var(--dsh-content-font-size, 14px); line-height: calc(24px + var(--dsh-content-font-delta, 0px)); color: var(--dsw-alias-label-primary); flex-direction: column; display: flex; }
 .pw-answer__body { flex-direction: column; gap: 16px; display: flex; }
-.pw-answer__stopped { border-radius: var(--dsw-radius-sm); background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-tertiary); align-self: flex-start; padding: 0 6px; font-size: 11px; line-height: 18px; }
-.pw-answer__actions { margin-top: 16px; margin-left: -6px; }
+.pw-answer__stopped { border-radius: var(--dsw-radius-sm); background: var(--dsw-alias-interactive-bg-hover); color: var(--pw-label-meta); align-self: flex-start; padding: 0 8px; font-size: 11px; line-height: 18px; }
 
-.pw-actions { height: calc(28px + var(--dsh-content-font-delta, 0px)); align-items: center; gap: 8px; display: flex; }
-.pw-actions--reveal { opacity: 0; transition: opacity 80ms; }
-.pw-turn:hover .pw-actions--reveal, .pw-turn:focus-within .pw-actions--reveal { opacity: 1; }
-.pw-actionTime { font-size: 13px; line-height: calc(24px + var(--dsh-content-font-delta, 0px)); color: var(--dsw-alias-label-tertiary); white-space: nowrap; padding-right: 12px; }
+/* Row metadata. The timestamp is information and follows its own setting; the copy button
+   lives in the side gutter, so hover-revealing it never reserves a 44px band of whitespace
+   under every answer (SPAC-01). */
+.pw-turnMeta { display: flex; align-items: center; gap: 2px; height: 20px; margin-top: 2px; }
+.pw-turnMeta[data-side="end"] { justify-content: flex-end; }
+.pw-turnMeta--overlay { position: absolute; top: 0; margin-top: 0; opacity: 0; pointer-events: none; background: var(--dsw-alias-bg-layer-1); border-radius: var(--dsw-radius-sm); box-shadow: var(--dsw-elevation-stroke); }
+.pw-turnMeta--overlay[data-side="start"] { left: 0; }
+.pw-turnMeta--overlay[data-side="end"] { right: 0; }
+.pw-turn:hover .pw-turnMeta--overlay, .pw-turn:focus-within .pw-turnMeta--overlay { opacity: 1; pointer-events: auto; }
+html[data-input-modality="touch"] .pw-turnMeta--overlay { opacity: 1; pointer-events: auto; }
+.pw-actionTime { font-size: 12px; line-height: 20px; color: var(--pw-label-meta); white-space: nowrap; padding: 0 6px; }
+.pw-queueTag { font-size: 11px; line-height: 18px; padding: 0 6px; border-radius: var(--dsw-radius-sm); color: var(--dsw-alias-label-secondary); background: var(--dsw-alias-interactive-bg-hover); }
 .pw-action {
   width: calc(28px + var(--dsh-content-font-delta, 0px));
   height: calc(28px + var(--dsh-content-font-delta, 0px));
@@ -95,7 +103,7 @@
   margin: 4px 0 4px 4px;
   display: flex;
 }
-.pw-ioSection { grid-template-columns: max-content 1fr; align-items: baseline; column-gap: 14px; max-height: 150px; padding: 12px 16px; display: grid; overflow-y: auto; }
+.pw-ioSection { grid-template-columns: max-content 1fr; align-items: baseline; column-gap: 14px; max-height: min(60vh, 320px); padding: 12px 16px; display: grid; overflow-y: auto; }
 .pw-ioLabel { color: var(--dsw-alias-label-caption); align-self: start; position: sticky; top: 0; }
 .pw-ioDivider { background: var(--dsw-alias-border-l2); flex: none; height: var(--pw-hairline, .5px); }
 .pw-ioText { white-space: pre-wrap; word-break: break-word; min-width: 0; color: var(--dsw-alias-label-secondary); }
@@ -133,7 +141,6 @@
   margin: 4px 0 4px 4px;
   overflow: hidden;
 }
-.pw-toolBlock__list { max-height: 320px; margin: 0; padding: 0; list-style: none; overflow-y: auto; }
 .pw-toolBlock__item { margin: 0; padding: 10px 14px; }
 .pw-toolBlock__item + .pw-toolBlock__item { border-top: var(--pw-hairline, .5px) solid var(--dsw-alias-border-l2); }
 .pw-toolBlock__heading { flex-wrap: wrap; align-items: baseline; gap: 8px; display: flex; }
@@ -198,8 +205,11 @@
 .pw-md h1 { font: var(--dsw-font-markdown-h1); margin: 32px 0 16px; }
 .pw-md h2 { font: var(--dsw-font-markdown-h2); margin: 32px 0 16px; }
 .pw-md h3 { font: var(--dsw-font-markdown-h3); margin: 32px 0 16px; }
-.pw-md h4 { font: var(--dsw-font-markdown-h4); margin: 16px 0; }
-.pw-md :where(h5, h6) { font: var(--dsw-font-markdown-base-strong); margin: 16px 0; }
+/* H4-H6 used to all be 14px/600, i.e. indistinguishable from body copy: one monotonic scale (MD-03). */
+.pw-md h4 { font-size: calc(15px + var(--dsh-content-font-delta, 0px)); line-height: calc(22px + var(--dsh-content-font-delta, 0px)); font-weight: 600; margin: 20px 0 8px; letter-spacing: -.005em; }
+.pw-md h5 { font-size: calc(14px + var(--dsh-content-font-delta, 0px)); line-height: calc(22px + var(--dsh-content-font-delta, 0px)); font-weight: 600; margin: 16px 0 6px; letter-spacing: 0; }
+.pw-md h6 { font-size: calc(13px + var(--dsh-content-font-delta, 0px)); line-height: calc(20px + var(--dsh-content-font-delta, 0px)); font-weight: 500; margin: 16px 0 4px; letter-spacing: .02em; text-transform: none; color: var(--dsw-alias-label-secondary); }
+.pw-md :where(h4,h5,h6) strong { font-weight: inherit; }
 .pw-md :where(h1,h2,h3,h4,h5,h6) strong { font-weight: inherit; }
 .pw-md p { margin: 16px 0; }
 .pw-md :where(h4,h5,h6) + :where(ul, ol) { margin-top: 8px; }
@@ -213,7 +223,7 @@
 .pw-md li > *:first-child { margin-top: 0; }
 .pw-md li > *:last-child:not(.pw-codecard) { margin-bottom: 0; }
 .pw-md hr { display: block; border: none; height: var(--pw-hairline, .5px); margin: 32px 0; background: var(--dsw-alias-border-l2); }
-.pw-md blockquote { border-left: 2px solid var(--dsw-alias-label-caption); margin: 16px 0 0; padding-left: 14px; }
+.pw-md blockquote { border-left: 2px solid var(--dsw-alias-label-caption); margin: 16px 0; padding-left: 14px; }
 .pw-md a {
   color: var(--dsw-alias-link);
   font-weight: 500;
@@ -341,16 +351,20 @@
 .pw-kv dd { color: var(--dsw-alias-label-primary); margin: 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 
 /* directory picker */
-.pw-dirpick { display: flex; flex-direction: column; min-height: 0; height: min(500px, calc(100dvh - 96px)); }
+/* The list sizes to its content instead of reserving a tall empty box (WS-03). */
+.pw-dirpick { display: flex; flex-direction: column; min-height: 0; max-height: min(560px, calc(100dvh - 160px)); }
 .pw-dirpick__bar { display: flex; align-items: center; gap: 4px; font-size: 13px; color: var(--dsw-alias-label-secondary); min-width: 0; flex-wrap: wrap; }
 .pw-dirpick__bar button { color: inherit; cursor: pointer; border-radius: var(--dsw-radius-sm); padding: 2px 6px; }
 .pw-dirpick__bar button:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
+.pw-dirpick__error { display: flex; align-items: center; gap: 6px; margin-top: 8px; font-size: 12px; color: var(--dsw-alias-state-error-primary); }
+.pw-dirpick__chosen { margin-top: 10px; font-size: 12px; color: var(--dsw-alias-label-secondary); overflow-wrap: anywhere; }
 .pw-dirpick__list {
   border: var(--pw-hairline, .5px) solid var(--dsw-alias-border-l2);
   border-radius: var(--dsw-radius-md);
   margin-top: 12px;
-  flex: 1;
-  min-height: 0;
+  flex: 1 1 auto;
+  min-height: 120px;
+  max-height: 46vh;
   overflow-y: auto;
   padding: 4px;
 }
@@ -374,3 +388,80 @@
 .pw-diff__add { display: block; color: var(--dsw-static-green-500); background: var(--dsw-static-green-500-a08); }
 body[data-ds-dark-theme] .pw-diff__del { color: var(--dsw-static-red-400); }
 body[data-ds-dark-theme] .pw-diff__add { color: var(--dsw-static-green-400); }
+
+/* ---------------------------------------------------------------------------
+   Audit refinements (visual_audit): markdown details, diff, meter, tree, panel.
+   --------------------------------------------------------------------------- */
+
+/* Task lists: `- [ ]` must read as a checkbox, not as a text field (MD-01). */
+.pw-md li > input[type="checkbox"] { width: 14px; height: 14px; margin: 0 6px 0 0; vertical-align: -2px; accent-color: var(--dsw-static-deepseek-500); }
+.pw-md li:has(> input[type="checkbox"]) { list-style: none; margin-left: -16px; }
+.pw-md li:has(> input[type="checkbox"]) > input[type="checkbox"]:checked + * { color: var(--dsw-alias-label-secondary); text-decoration: line-through; }
+
+/* Prose directly under a disclosure row used to sit ~100px below it (SPAC-02). */
+.pw-flow__content > *:not([hidden]):not(:empty) ~ *:not([hidden]):not(:empty) { margin-top: 2px; }
+.pw-md p:first-child { margin-top: 0; }
+.pw-md p:last-child { margin-bottom: 0; }
+.pw-discBody { margin-top: 4px; }
+
+/* Code cards: hint that a long line scrolls, and keep the wrap toggle honest (MD-06). */
+.pw-codecard { position: relative; }
+.pw-codecard[data-scrollable="true"]::after {
+  content: ""; position: absolute; top: 34px; right: 0; width: 28px; bottom: 8px; pointer-events: none;
+  background: linear-gradient(90deg, transparent, var(--dsw-alias-markdown-code-block-banner));
+  border-radius: 0 var(--dsw-radius-md) var(--dsw-radius-md) 0;
+}
+.pw-codecard--wrap[data-scrollable="true"]::after { display: none; }
+
+/* Diffs: symmetric tint, readable in both themes, with context rows (TOOL-01). */
+.pw-diff__ctx { display: block; color: var(--dsw-alias-label-secondary); }
+.pw-diff__del { display: block; color: var(--dsw-static-red-600); background: var(--dsw-static-red-400-a12); }
+.pw-diff__add { display: block; color: var(--dsw-static-green-500); background: var(--dsw-static-green-500-a12); }
+body[data-ds-dark-theme] .pw-diff__del { color: var(--dsw-static-red-400); background: #d645451f; }
+body[data-ds-dark-theme] .pw-diff__add { color: var(--dsw-static-green-400); background: #2f9e441f; }
+.pw-discDuration { flex: none; margin-left: 8px; color: var(--pw-label-meta); font-variant-numeric: tabular-nums; }
+
+/* Context ring: the trigger's two circles had no CSS at all, so both painted solid black (CTX-01/DARK-02). */
+svg.pw-ring { overflow: visible; flex: none; }
+.pw-ring .pw-meter__track { fill: none; stroke: var(--dsw-alias-border-l4); stroke-width: 2; }
+.pw-ring .pw-meter__fill { fill: none; stroke: var(--dsw-static-deepseek-500); stroke-width: 2; stroke-linecap: round; }
+body[data-ds-dark-theme] .pw-ring .pw-meter__fill { stroke: var(--dsw-static-deepseek-400); }
+.pw-meter__row span { color: var(--pw-label-meta); }
+
+/* Trajectory: capped indentation needs its own affordances (TRJ-01). */
+.pw-treeRow__depth { flex: none; font-size: 10px; line-height: 16px; padding: 0 4px; border-radius: var(--dsw-radius-xs); color: var(--pw-label-meta); background: var(--dsw-alias-interactive-bg-hover); }
+.pw-treeRow__meta { color: var(--pw-label-meta); }
+
+/* Long file previews and the prompt dump scroll as one block (PNL-03, PERF-05). */
+.pw-filePreview, .pw-promptDump {
+  border: var(--pw-hairline, .5px) solid var(--dsw-alias-border-l1);
+  border-radius: var(--dsw-radius-md);
+  padding: 10px 12px;
+  font-family: var(--ds-font-family-code);
+  font-size: var(--dsh-code-font-size, 11px);
+  max-height: 60vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+}
+.pw-promptDump { max-height: 45vh; }
+
+/* Transcript-level notices (load older, unreadable lines). */
+.pw-loadOlder { display: flex; justify-content: center; padding: 4px 0 8px; }
+.pw-jumpLatest { position: sticky; align-self: center; bottom: 8px; z-index: 5; background: var(--dsw-alias-button-floating-fill); }
+.pw-notice {
+  display: flex; align-items: flex-start; gap: 8px;
+  border-radius: var(--dsw-radius-md);
+  border: var(--pw-hairline, .5px) solid var(--dsw-alias-border-l2);
+  background: var(--dsw-alias-bg-layer-1);
+  padding: 8px 10px; font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary);
+}
+.pw-notice--warning { border-color: var(--dsw-alias-state-warn-tertiary); }
+.pw-notice > svg { flex: none; margin-top: 2px; color: var(--dsw-alias-state-warn-label); }
+.pw-notice__detail { color: var(--pw-label-meta); }
+
+/* Empty session: distinct from "no session selected" (GEN-04). */
+.pw-emptySession { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 56px 16px; color: var(--dsw-alias-label-secondary); text-align: center; }
+.pw-emptySession__title { font-size: 15px; font-weight: 500; color: var(--dsw-alias-label-primary); }
+.pw-emptySession__hint { font-size: 13px; color: var(--pw-label-meta); max-width: 42ch; }

@@ -3,7 +3,16 @@
 import { create } from "zustand";
 import { api, newOperationId, ApiError } from "./api";
 import { SseManager } from "./sse";
+import { humaniseError, isReadOnlyMode } from "./labels";
+import { basename } from "./format";
 import { toast } from "../ui/Toast";
+
+function dedupeBy<T>(xs: T[], key: (x: T) => string): T[] {
+  const seen = new Set<string>();
+  const out: T[] = [];
+  for (const x of xs) { const k = key(x); if (!seen.has(k)) { seen.add(k); out.push(x); } }
+  return out;
+}
 
 export interface EntryView {
   entryId: string; parentId: string | null; type: string; timestamp: string;
@@ -57,12 +66,17 @@ export interface ModelInfo { provider: string; modelId: string; name?: string; c
 export interface WorkspaceInfo { key: string; path: string; label: string | null }
 export interface WireImage { mimeType: "image/png" | "image/jpeg" | "image/gif" | "image/webp"; dataBase64: string; name?: string }
 export interface BrowseResult { path: string; parent: string | null; home: string; entries: { name: string; kind: "dir" | "file" }[]; truncated: boolean }
-export interface FileView { kind: string; path: string; sizeBytes: number; text?: string; entries?: { name: string; kind: string; sizeBytes: number | null }[] }
+export interface FileView { kind: string; path: string; sizeBytes: number; text?: string; truncated?: boolean; entries?: { name: string; kind: string; sizeBytes: number | null }[] }
 
 export interface SessionView {
   entries: EntryView[];
   entryTotal: number;
   hasOlder: boolean;
+  /** Entry id to page from to reach the entries before `entries[0]` (null = at the start). */
+  olderCursor: string | null;
+  loadingOlder: boolean;
+  /** Lines of the session file that could not be read (SRV-04). */
+  diagnostics: { message: string; byteOffset: number }[];
   runtime: RuntimeState | null;
   previews: Record<string, PreviewState>;
   tools: Record<string, ToolStateView>;
@@ -80,7 +94,8 @@ export interface SessionView {
 }
 
 const emptySession = (): SessionView => ({
-  entries: [], entryTotal: 0, hasOlder: false, runtime: null, previews: {}, tools: {},
+  entries: [], entryTotal: 0, hasOlder: false, olderCursor: null, loadingOlder: false,
+  diagnostics: [], runtime: null, previews: {}, tools: {},
   dialogs: [], status: null, meta: null, sse: "connecting", notes: [], models: [],
   commands: [], context: null, stats: null, tree: null, loaded: false,
 });
@@ -88,6 +103,10 @@ const emptySession = (): SessionView => ({
 interface Store {
   ready: boolean;
   error: string | null;
+  /** How many times boot() has been retried since the server last answered (GEN-01). */
+  bootAttempts: number;
+  /** The server stopped answering while the tab stayed open (SRV-05). */
+  serverDown: boolean;
   health: { version: string; pi: { resolvedVersion: string | null; tested: boolean }; managed: { active: number; limit: number } } | null;
   workspaces: WorkspaceInfo[];
   sessions: SessionListItem[];
@@ -96,11 +115,20 @@ interface Store {
   lastOperation: { id: string; state: string; message?: string } | null;
 
   boot: () => Promise<void>;
+  /** One cheap health probe; also the "did the server go away underneath us?" watch. */
+  pingServer: () => Promise<void>;
+  /**
+   * The machine-wide stream: "a terminal pi just became controllable" (or stopped being).
+   * Without this a tab only learns about new sessions when it reloads (E15).
+   */
+  watchGlobal: () => void;
   refreshSessions: () => Promise<void>;
   openSession: (key: string) => Promise<void>;
+  loadCatalogue: (key: string) => Promise<void>;
+  loadOlder: (key: string) => Promise<void>;
   closeSse: (key: string) => void;
   loadPanel: (key: string, which: "context" | "stats" | "tree") => Promise<void>;
-  command: (command: Record<string, unknown>, key?: string) => Promise<void>;
+  command: (command: Record<string, unknown>, key?: string) => Promise<boolean>;
   acquireControl: (key: string) => Promise<boolean>;
   renewControl: (key: string) => Promise<boolean>;
   answerDialog: (d: DialogRequest, value: unknown, cancel?: boolean) => Promise<void>;
@@ -108,6 +136,9 @@ interface Store {
   startInWorkspace: (workspaceKey: string, text: string, images?: WireImage[]) => Promise<string | null>;
   heroWorkspace: string | null;
   setHeroWorkspace: (key: string | null) => void;
+  /** Workspace the Files panel should show; set when a workspace row is clicked (SB-08). */
+  filesWorkspaceKey: string | null;
+  setFilesWorkspaceKey: (key: string | null) => void;
   removeWorkspace: (key: string) => Promise<void>;
   addWorkspace: (path: string, label?: string) => Promise<string | null>;
   browse: (path: string) => Promise<BrowseResult | null>;
@@ -123,6 +154,13 @@ const controllerId = (() => {
 })();
 const grants = new Map<string, { epoch: number; secret: string; expiresAt: number }>();
 const renewTimers = new Map<string, number>();
+
+/** One machine-wide stream per tab (`watchGlobal`); null until the first successful boot. */
+let globalStream: EventSource | null = null;
+
+/** Keys of the rows the sidebar currently shows, in display order. Module-level (not store
+    state) on purpose: it is read by the Alt+↑/↓ handler, which must not cause a re-render. */
+export const visibleSessionKeys: string[] = [];
 
 export const useStore = create<Store>((set, get) => {
   const sses = new Map<string, SseManager>();
@@ -165,7 +203,7 @@ export const useStore = create<Store>((set, get) => {
         try {
           const rec = await api.get<{ state: string; result?: { error?: { message?: string; code?: string } } }>(`/api/v1/operations/${encodeURIComponent(opId)}`);
           if (rec.state === "failed" || rec.state === "unknown" || rec.state === "cancelled") {
-            const msg = rec.result?.error?.message ?? `${rec.state}`;
+            const msg = humaniseError(rec.result?.error?.message ?? `${rec.state}`);
             set({ lastOperation: { id: opId, state: rec.state, message: msg } });
             toast.error(msg);
             const k = get().activeKey;
@@ -175,6 +213,10 @@ export const useStore = create<Store>((set, get) => {
             }
           } else if (rec.state === "succeeded") {
             set({ lastOperation: { id: opId, state: "succeeded" } });
+            // The runtime is now the authority again: pull status so a model/thinking switch
+            // shows in the chip, the menu tick and the panel within a second (CTL-03).
+            const k = get().activeKey;
+            if (k) { await refreshStatus(k); void get().loadCatalogue(k); }
           } else {
             if (delay < 8000) await poll(delay * 2);
           }
@@ -193,13 +235,23 @@ export const useStore = create<Store>((set, get) => {
         patch(key, (v) => applySseEvent(v, name, payload));
         // these mean "your view of the world is stale": pull the authoritative snapshot
         if (name === "ownerChanged" || name === "resync" || name === "hostExited") void refreshStatus(key);
+        // A runtime that just appeared (or just changed) is the first moment its catalogues exist.
+        if (name === "ownerChanged") void get().loadCatalogue(key);
+        if (name === "runtimeState") {
+          const r = payload as RuntimeState;
+          const v = get().views[key];
+          if (v && r?.model && (!v.models.length || v.models.some((m) => `${m.provider}/${m.modelId}` !== `${r.model!.provider}/${r.model!.modelId}`))) {
+            // model changed outside our own command (terminal pi, another tab): re-read it
+            if (v.runtime?.model && (v.runtime.model.provider !== r.model.provider || v.runtime.model.modelId !== r.model.modelId)) void refreshStatus(key);
+          }
+        }
       },
     }));
   };
 
   return {
-    ready: false, error: null, health: null, workspaces: [], sessions: [], activeKey: null,
-    views: {}, lastOperation: null, heroWorkspace: null,
+    ready: false, error: null, bootAttempts: 0, serverDown: false, health: null, workspaces: [], sessions: [], activeKey: null,
+    views: {}, lastOperation: null, heroWorkspace: null, filesWorkspaceKey: null,
 
     // No login: the server hands out a browser session on the first request, so booting is
     // just "talk to the server, then show the chats".
@@ -211,20 +263,79 @@ export const useStore = create<Store>((set, get) => {
           if (c.csrf) api.setCsrf(c.csrf);
         }
         const health = await api.get<Store["health"]>("/api/v1/health");
-        set({ ready: true, error: null, health });
+        set({ ready: true, error: null, health, bootAttempts: 0 });
         await get().refreshSessions();
+        get().watchGlobal();
       } catch (e) {
-        set({ ready: false, error: (e as Error).message || "cannot reach the pi-web server" });
+        // "Failed to fetch" is what the browser says, not what the user wants to read (SRV-08).
+        set((s) => ({ ready: false, error: humaniseError((e as Error).message) || "cannot reach the pi-web server", bootAttempts: s.bootAttempts + 1 }));
+      }
+    },
+
+    watchGlobal: () => {
+      if (globalStream || typeof EventSource === "undefined") return;
+      try {
+        const es = new EventSource("/api/v1/events", { withCredentials: true });
+        globalStream = es;
+        const on = (name: string) => (ev: MessageEvent) => {
+          let payload: { sessionKey?: string; pid?: number; cwd?: string | null; mode?: string; reason?: string } = {};
+          try {
+            payload = ((JSON.parse(ev.data) as { payload?: unknown }).payload ?? {}) as typeof payload;
+          } catch {
+            return;
+          }
+          void get().refreshSessions();
+          // Naming the folder (and pid) is the point: it says *which* terminal just joined.
+          if (name === "sessionAppeared" && payload.mode === "live") {
+            toast.success(`Terminal pi is live${payload.cwd ? ` — ${basename(payload.cwd)}` : ""}${payload.pid ? ` (pid ${payload.pid})` : ""}`);
+          }
+        };
+        for (const name of ["sessionAppeared", "sessionRetired", "runtimeAttached", "runtimeGone"]) {
+          es.addEventListener(name, on(name));
+        }
+        // EventSource reconnects by itself; refetch the list on every fresh open to close gaps.
+        es.onopen = () => { void get().refreshSessions(); };
+      } catch {
+        globalStream = null; // no global stream: the list still refreshes on boot and after commands
+      }
+    },
+
+    pingServer: async () => {
+      // A tab left open while `pi-web` was restarted used to keep showing a stale transcript
+      // with no hint at all. One health call per tick makes the outage visible and the
+      // recovery automatic (SRV-05). Streams already report their own status.
+      const was = get().serverDown;
+      try {
+        const health = await api.get<Store["health"]>("/api/v1/health");
+        if (was) {
+          set({ serverDown: false, health, error: null });
+          toast.success("Back in touch with pi-web");
+          void get().refreshSessions();
+        } else {
+          set({ health });
+        }
+      } catch {
+        if (!was) {
+          set({ serverDown: true });
+          toast.error("Lost the pi-web server — retrying every few seconds");
+        }
       }
     },
 
     refreshSessions: async () => {
-      const [out, ws] = await Promise.all([
-        api.get<{ sessions: SessionListItem[] }>("/api/v1/sessions?limit=200"),
-        api.get<{ workspaces: { workspaceKey: string; path: string; label?: string | null }[] }>("/api/v1/workspaces"),
-      ]);
+      // Follow the server's cursor: a capped first page used to hide sessions silently (SRV-02).
+      const pages: SessionListItem[] = [];
+      let cursor: string | null = null;
+      for (let i = 0; i < 20; i++) {
+        const qs: string = cursor ? `limit=200&cursor=${encodeURIComponent(cursor)}` : "limit=200";
+        const out: { sessions: SessionListItem[]; nextCursor?: string | null } = await api.get<{ sessions: SessionListItem[]; nextCursor?: string | null }>(`/api/v1/sessions?${qs}`);
+        pages.push(...out.sessions);
+        cursor = out.nextCursor ?? null;
+        if (!cursor) break;
+      }
+      const ws = await api.get<{ workspaces: { workspaceKey: string; path: string; label?: string | null }[] }>("/api/v1/workspaces");
       set({
-        sessions: out.sessions,
+        sessions: dedupeBy(pages, (s) => s.meta.sessionKey),
         workspaces: ws.workspaces.map((w) => ({ key: w.workspaceKey, path: w.path, label: w.label ?? null })),
       });
     },
@@ -237,7 +348,7 @@ export const useStore = create<Store>((set, get) => {
         scheduleRenewal(key);
         return true;
       } catch (e) {
-        get().note((e as ApiError).message);
+        get().note(humaniseError((e as ApiError).message));
         return false;
       }
     },
@@ -262,14 +373,51 @@ export const useStore = create<Store>((set, get) => {
       patch(key, (v) => ({ ...v }));
       attachSse(key); // the SSE stream sends an authoritative snapshot on subscribe
       await refreshStatus(key);
+      // The catalogue belongs to the runtime, which may not exist yet; fetch lazily instead of
+      // once-at-open (CTL-02), and never leave a stale panel behind from the previous session.
+      void get().loadCatalogue(key);
+    },
+
+    loadCatalogue: async (key) => {
+      const cur = get().views[key];
+      if (!cur) return;
       try {
         const m = await api.get<{ models: ModelInfo[] }>(`/api/v1/sessions/${encodeURIComponent(key)}/models`);
         patch(key, (v) => ({ ...v, models: m.models ?? [] }));
-      } catch { /* no owning runtime with a catalogue */ }
+      } catch (e) {
+        // 501 = this kind of session has no catalogue; distinguish it from "not ready yet".
+        const code = (e as ApiError).code;
+        patch(key, (v) => ({ ...v, models: [], ...(code === "read_only" ? { notes: v.notes } : {}) }));
+      }
       try {
         const c = await api.get<{ commands: { name: string; description?: string; argumentHint?: string }[] }>(`/api/v1/sessions/${encodeURIComponent(key)}/commands`);
         patch(key, (v) => ({ ...v, commands: c.commands ?? [] }));
       } catch { /* command list is optional */ }
+    },
+
+    /** Walk backwards through the session file so the oldest turns stay reachable (TRN-01). */
+    loadOlder: async (key) => {
+      const v = get().views[key];
+      if (!v || v.loadingOlder) return;
+      const before = v.olderCursor ?? v.entries[0]?.entryId;
+      if (!before) { patch(key, (x) => ({ ...x, hasOlder: false })); return; }
+      patch(key, (x) => ({ ...x, loadingOlder: true }));
+      try {
+        const page = await api.get<{ entries: EntryView[]; olderCursor?: string | null; entryCount: number }>(
+          `/api/v1/sessions/${encodeURIComponent(key)}/entries?before=${encodeURIComponent(before)}&limit=200`);
+        const older = page.entries.filter((e) => !v.entries.some((x) => x.entryId === e.entryId));
+        patch(key, (x) => ({
+          ...x,
+          entries: [...older, ...x.entries],
+          // Keep walking back from the oldest record we now hold.
+          olderCursor: older.length ? older[0]!.entryId : null,
+          hasOlder: Boolean(page.olderCursor) && older.length > 0,
+          loadingOlder: false,
+        }));
+      } catch (e) {
+        patch(key, (x) => ({ ...x, loadingOlder: false }));
+        get().note(humaniseError((e as ApiError).message));
+      }
     },
 
     closeSse: (key) => { sses.get(key)?.close(); sses.delete(key); },
@@ -278,14 +426,17 @@ export const useStore = create<Store>((set, get) => {
       try {
         const out = await api.get<Record<string, unknown>>(`/api/v1/sessions/${encodeURIComponent(key)}/${which}`);
         patch(key, (v) => ({ ...v, [which]: out } as SessionView));
-      } catch (e) { get().note((e as ApiError).message); }
+      } catch (e) { get().note(humaniseError((e as ApiError).message)); }
     },
 
     command: async (command, keyOverride) => {
       const key = keyOverride ?? get().activeKey;
-      if (!key) return;
+      if (!key) return false;
       const st = get().views[key]?.status;
-      if (!st?.runtime) { get().note("no controllable runtime for this session (file mirror / owner offline)"); return; }
+      if (!st?.runtime) {
+        get().note(isReadOnlyMode(st?.mode) ? "This session is read-only: there is no running pi to control." : "No controllable runtime for this session yet.");
+        return false;
+      }
       if (st.capabilities?.canControl) {
         const g = grants.get(key);
         if (!g || g.expiresAt - Date.now() < 3_000) await get().renewControl(key);
@@ -311,6 +462,12 @@ export const useStore = create<Store>((set, get) => {
         set({ lastOperation: { id: opId, state: out.state ?? "accepted" } });
         watchOperation(opId);
         setTimeout(() => { void get().refreshSessions(); }, 900);
+        // A model/thinking change lands inside the runtime a moment after the POST returns;
+        // re-read status so the chip and the menu tick stop showing the previous value.
+        if (command.type === "setModel" || command.type === "setThinking") {
+          setTimeout(() => { void refreshStatus(key); }, 700);
+        }
+        return true;
       } catch (e) {
         const err = e as ApiError;
         if (err.code === "stale_control" || err.code === "forbidden" || err.code === "busy"
@@ -322,12 +479,14 @@ export const useStore = create<Store>((set, get) => {
               const g = grants.get(key)!;
               const out = await resend(g);
               set({ lastOperation: { id: opId, state: out.state ?? "accepted" } });
-              return;
+              watchOperation(opId);
+              return true;
             } catch (e2) { err.code = (e2 as ApiError).code; err.message = (e2 as ApiError).message; }
           }
         }
         set({ lastOperation: { id: opId, state: "failed", message: err.message } });
-        get().note(err.message);
+        get().note(humaniseError(err.message));
+        return false;
       }
     },
 
@@ -347,10 +506,12 @@ export const useStore = create<Store>((set, get) => {
         const out = await api.post<{ sessionKey: string }>("/api/v1/sessions", { workspaceKey });
         await get().refreshSessions();
         return out.sessionKey;
-      } catch (e) { get().note((e as ApiError).message); return null; }
+      } catch (e) { get().note(humaniseError((e as ApiError).message)); return null; }
     },
 
     setHeroWorkspace: (key) => set({ heroWorkspace: key }),
+
+    setFilesWorkspaceKey: (key) => set({ filesWorkspaceKey: key }),
 
     /** The hero composer's "pick a workspace, type, send" flow: start a managed pi, wait for
         it to accept input, then deliver the first prompt. Returns the session key. */
@@ -377,7 +538,9 @@ export const useStore = create<Store>((set, get) => {
           sessionGeneration: st.sessionGeneration, controlEpoch: grant?.epoch ?? 0, controlSecret: grant?.secret ?? "",
           command: { type: "prompt", text, delivery: "start", ...(images?.length ? { images } : {}) },
         }, opId);
-      } catch (e) { get().note((e as ApiError).message); }
+        watchOperation(opId);
+        void get().loadCatalogue(key);
+      } catch (e) { get().note(humaniseError((e as ApiError).message)); }
       return key;
     },
 
@@ -386,42 +549,78 @@ export const useStore = create<Store>((set, get) => {
         const out = await api.post<{ workspace: { workspaceKey: string } }>("/api/v1/workspaces", { path, ...(label ? { label } : {}) });
         await get().refreshSessions();
         return out.workspace.workspaceKey;
-      } catch (e) { toast.error((e as ApiError).message); return null; }
+      } catch (e) { toast.error(humaniseError((e as ApiError).message)); return null; }
     },
 
     removeWorkspace: async (key) => {
       try {
+        const gone = get().workspaces.find((w) => w.key === key);
         await api.del(`/api/v1/workspaces/${encodeURIComponent(key)}`);
         await get().refreshSessions();
-      } catch (e) { toast.error((e as ApiError).message); }
+        toast.success(gone ? `${basename(gone.path)} removed from the allowlist (running sessions were not interrupted)` : "Removed from the allowlist (running sessions were not interrupted)");
+      } catch (e) { toast.error(humaniseError((e as ApiError).message)); }
     },
 
     browse: async (path) => {
       try { return await api.get<BrowseResult>(`/api/v1/browse?path=${encodeURIComponent(path)}`); }
-      catch (e) { toast.error((e as ApiError).message); return null; }
+      catch (e) { toast.error(humaniseError((e as ApiError).message)); return null; }
     },
 
     readFile: async (workspaceKey, path) => {
       try {
         return await api.get<FileView>(`/api/v1/files?workspaceKey=${encodeURIComponent(workspaceKey)}&path=${encodeURIComponent(path)}`);
-      } catch (e) { toast.error((e as ApiError).message); return null; }
+      } catch (e) { toast.error(humaniseError((e as ApiError).message)); return null; }
     },
 
     note: (msg) => {
       const k = get().activeKey;
-      toast.warn(msg);
-      patch(k, (v) => ({ ...v, notes: [...v.notes.slice(-3), msg] }));
-      if (k) window.setTimeout(() => patch(k, (v) => ({ ...v, notes: v.notes.filter((n) => n !== msg) })), 8000);
+      const text = humaniseError(msg);
+      // One visible stack, newest last, no duplicates (CTL-10).
+      toast.warn(text);
+      patch(k, (v) => ({ ...v, notes: [...v.notes.filter((n) => n !== text).slice(-4), text] }));
+      if (k) window.setTimeout(() => patch(k, (v) => ({ ...v, notes: v.notes.filter((n) => n !== text) })), 8000);
     },
   };
 });
 
-export function applySseEvent(v: SessionView, name: string, payload: unknown): SessionView {
-  const nv = { ...v };
+/**
+ * Drop preview objects the transcript no longer needs (TRN-05): a finished preview whose entry
+ * has landed, or a finished user echo whose message is already committed, would otherwise pile
+ * up for the whole life of the tab.
+ */
+function prunePreviews(nv: SessionView): void {
+  const ids = new Set(nv.entries.map((e) => e.entryId));
+  const committedUser = new Set<string>();
+  for (const e of nv.entries) {
+    const m = (e.raw as { message?: { role?: string; content?: unknown } } | undefined)?.message;
+    if (m?.role === "user") {
+      const c = m.content;
+      const text = typeof c === "string" ? c : Array.isArray(c) ? c.map((b) => (b as { text?: string })?.text ?? "").join("") : "";
+      committedUser.add(text.trim());
+    }
+  }
+  for (const [id, p] of Object.entries(nv.previews)) {
+    if (!p.done) continue;
+    if (p.mappedEntryId && ids.has(p.mappedEntryId)) { delete nv.previews[id]; continue; }
+    if (p.role === "user") {
+      const text = p.blocks.map((b) => (b.block as { text?: string })?.text ?? "").join("").trim();
+      if (text && committedUser.has(text)) delete nv.previews[id];
+    }
+  }
+}
+
+export function applySseEvent(v: SessionView, name: string, payload: unknown): SessionView {  const nv = { ...v };
   switch (name) {
     case "snapshot": {
-      const s = payload as { entries?: EntryView[]; entryTotal?: number; runtimeState?: RuntimeState; status?: SessionStatusLite; meta?: SessionMeta; pendingDialogs?: DialogRequest[]; observedDialogs?: DialogRequest[] };
-      if (s.entries) { nv.entries = s.entries; nv.entryTotal = s.entryTotal ?? s.entries.length; }
+      const s = payload as { entries?: EntryView[]; entryTotal?: number; olderAvailable?: boolean; diagnostics?: { message: string; byteOffset: number }[]; runtimeState?: RuntimeState; status?: SessionStatusLite; meta?: SessionMeta; pendingDialogs?: DialogRequest[]; observedDialogs?: DialogRequest[] };
+      if (s.entries) {
+        nv.entries = s.entries;
+        nv.entryTotal = s.entryTotal ?? s.entries.length;
+        // The snapshot is the newest window; anything older is one `?before=` call away.
+        nv.olderCursor = s.entries.length ? s.entries[0]!.entryId : null;
+        nv.hasOlder = s.olderAvailable ?? nv.entries.length < nv.entryTotal;
+      }
+      if (s.diagnostics) nv.diagnostics = s.diagnostics;
       if (s.runtimeState) nv.runtime = s.runtimeState;
       if (s.status) nv.status = s.status;
       if (s.meta) nv.meta = s.meta;
@@ -437,6 +636,7 @@ export function applySseEvent(v: SessionView, name: string, payload: unknown): S
       if (idx >= 0) nv.entries = nv.entries.map((x, i) => (i === idx ? e : x));
       else nv.entries = [...nv.entries, e];
       nv.entryTotal = Math.max(nv.entryTotal, nv.entries.length);
+      prunePreviews(nv);
       break;
     }
     case "preview": {
@@ -460,6 +660,8 @@ export function applySseEvent(v: SessionView, name: string, payload: unknown): S
       for (const t of r.tools ?? []) nv.tools = { ...nv.tools, [t.toolCallId]: { ...(nv.tools[t.toolCallId] ?? ({} as ToolStateView)), ...t } };
       const keep = new Set((r.previews ?? []).map((p) => p.liveMessageId));
       for (const id of Object.keys(nv.previews)) if (!keep.has(id)) delete nv.previews[id];
+      // A finished preview whose entry has landed is dead weight (TRN-05).
+      prunePreviews(nv);
       break;
     }
     case "queueState": {
@@ -478,18 +680,18 @@ export function applySseEvent(v: SessionView, name: string, payload: unknown): S
       break;
     }
     case "conflict":
-      nv.notes = [...nv.notes.slice(-3), `file conflict: ${(payload as { kind?: string })?.kind ?? "detected"} — showing file contents only`];
+      nv.notes = [...nv.notes.slice(-3), `The session file changed underneath us (${(payload as { kind?: string })?.kind ?? "detected"}) — showing what is on disk.`];
       break;
     case "ownerChanged":
       // Normal while a managed pi boots or a bridge reconnects: silently re-fetch (see attachSse).
       break;
     case "hostExited": {
       const p = payload as { reason?: string };
-      nv.notes = [...nv.notes.slice(-3), `runtime exited (${p.reason ?? "unknown"}); session is now a file mirror`];
+      nv.notes = [...nv.notes.slice(-3), `The runtime exited (${p.reason ?? "unknown"}); this session is now read-only.`];
       break;
     }
     case "resync":
-      nv.notes = [...nv.notes.slice(-3), `stream resync (${(payload as { reason?: string })?.reason ?? "replay unavailable"})`];
+      nv.notes = [...nv.notes.slice(-3), "Re-syncing this session…"];
       nv.loaded = false;
       break;
     case "operationState":

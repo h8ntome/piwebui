@@ -30,31 +30,36 @@ export class LfFramer {
   feed(data: Buffer): FramedRecord[] {
     const out: FramedRecord[] = [];
     let cursor = 0;
+    // `pos` is the absolute offset *after* the last byte accounted for, so arithmetic inside the
+    // loop has to work from `base` (the absolute offset of data[0]). Adding `pos + cursor` after
+    // pos had already been advanced by a previous record double-counted the consumed bytes and
+    // handed out offsets past the end of the file — which made forward cursor paging read nothing.
+    const base = this.pos;
     while (cursor < data.length) {
       const nl = data.indexOf(0x0a, cursor);
       const segEnd = nl === -1 ? data.length : nl;
       const seg = data.subarray(cursor, segEnd);
       if (seg.length > 0) {
-        if (this.heldLen === 0) this.lineStart = this.pos + cursor;
+        if (this.heldLen === 0) this.lineStart = base + cursor;
         this.held.push(Buffer.from(seg));
         this.heldLen += seg.length;
       }
       if (nl === -1) {
-        this.pos += data.length - cursor;
+        this.pos = base + data.length;
         cursor = data.length;
         break;
       }
-      // Complete record ends at absolute offset pos+nl (LF byte).
+      // Complete record ends at absolute offset base+nl (the LF byte sits there).
       let body: Buffer;
       if (this.held.length === 1) body = this.held[0]!;
       else body = Buffer.concat(this.held, this.heldLen);
       if (body.length > 0 && body[body.length - 1] === 0x0d) body = body.subarray(0, body.length - 1);
-      const start = this.lineStart ?? this.pos + cursor;
-      out.push({ bytes: body, startOffset: start, endOffset: this.pos + nl + 1 });
+      const start = this.lineStart ?? base + cursor;
+      out.push({ bytes: body, startOffset: start, endOffset: base + nl + 1 });
       this.held = [];
       this.heldLen = 0;
       this.lineStart = null;
-      this.pos += nl + 1;
+      this.pos = base + nl + 1;
       cursor = nl + 1;
     }
     if (this.heldLen > this.maxPartial) {

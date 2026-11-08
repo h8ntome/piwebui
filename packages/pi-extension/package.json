@@ -1,0 +1,42 @@
+{
+  "name": "@piwebui/pi-web-bridge",
+  "version": "0.1.1",
+  "type": "module",
+  "description": "pi-web bridge for terminal pi sessions: live streaming and browser prompts with zero configuration.",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "pi-web",
+    "bridge"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions/pi-web-bridge.js"
+    ],
+    "changelogPath": "./CHANGELOG.md"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "files": [
+    "extensions",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "test": "tsx --test test/*.test.mts"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/h8ntome/piwebui.git"
+  },
+  "homepage": "https://github.com/h8ntome/piwebui#readme",
+  "author": "h8ntome"
+}

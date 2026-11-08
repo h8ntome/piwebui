@@ -15,6 +15,24 @@ Last full automated pass: 2026-11-05 (this session).
 | Live terminal bridge under a real PTY (prompt/steer/abort/model/thinking/rename/reload/new) | 26 | PASS |
 | Terminal extension-dialog **remote response** | S-13b | BLOCKED (public pi 1.5.0 API has no response handle for another extension's terminal dialog; observation works) |
 
+## Automated — terminal bridge smoke (`npm run smoke:bridge`)
+
+The bridge definition-of-done, against a **real** `pi` in its own pty and a **real** `pi-web`
+server started the way a user starts it, with the bridge installed the way a user installs it
+(`pi install <package>`) and **no bridge environment variables** in the `pi` process. 27 rows:
+descriptor modes and the token never being printed, zero-config adoption (incl. before the session
+file exists), live preview/toolState/runtimeState/entry counts for a terminal turn, browser
+prompt(start)/prompt(steer)/rename/setThinking reaching that same PID, `/new` retiring the old row
+and adopting a new live one, the machine-wide stream, `pi-web doctor`, terminal input still working,
+and a `kill -9` fallback to mirror. Last full pass: **27/27** (2026-11-08).
+
+Unit coverage of the same machinery (no browser, no TUI): `packages/pi-extension/test/*.test.mts`
+— descriptor resolution order and malformed/stale input, frame codec + replay ring + limits
+parity with the server, hub lifecycle (instance replacement, stale handles, double-load guard,
+mode gate), command mapping (busy policy, operation dedup, 501s), and `test/integration.test.mts`
+which drives the extension against the real acceptance gates over a real unix socket (attestation,
+duplicate runtime, wrong token, no-hello timeout, revoke, replay-after-reconnect, late server).
+
 ## Automated — full-stack smoke (`npx tsx e2e/server-smoke.mts`)
 
 Boot, auth (exchange/CSRF/host checks), workspace allowlist, meta/capabilities, managed session

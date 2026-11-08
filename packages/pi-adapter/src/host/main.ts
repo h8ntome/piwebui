@@ -400,9 +400,10 @@ async function main() {
       case "agent_start": emit("agent_start", {}); touch(); break;
       case "agent_settled": {
         lastSettled = { at: new Date().toISOString(), aborted: !!ev.aborted };
-        // settle implies the follow-up/steer queue was drained; keep queue view truthful
+        // settle implies the follow-up/steer queue was drained; keep queue view truthful.
+        // Same envelope as queue_update — the server reads `payload.queue` (CTL-05).
         queueState = { hasPending: false, count: 0, items: [], note: "settled: queue drained" };
-        emit("queue_state", queueState);
+        emit("queue_state", { queue: queueState });
         emit("agent_settled", { aborted: !!ev.aborted });
         touch();
         break;
@@ -532,7 +533,15 @@ async function main() {
         }
         if (delivery === "start" && !session.isIdle) throw mkErr("session is streaming; use steer or follow-up", "busy");
         if (delivery === "steer" && session.isIdle) throw mkErr("nothing to steer; session is idle", "busy");
-        const imgList = Array.isArray(images) && images.length ? images.map((im: any) => ({ type: "image", data: im.data, mimeType: im.mimeType })) : undefined;
+        // The browser sends { mimeType, dataBase64 }; the Pi host wants { mimeType, data }.
+        // Accept either spelling so an older/newer client never reaches Buffer.from(undefined).
+        const imgList = Array.isArray(images) && images.length
+          ? images.map((im: any, i: number) => {
+              const data = im?.data ?? im?.dataBase64;
+              if (typeof data !== "string" || !data) throw mkErr(`attachment ${i + 1} has no image data`, "invalid_request");
+              return { type: "image", data, mimeType: im.mimeType ?? "image/png" };
+            })
+          : undefined;
         const options: Record<string, unknown> = {
           expandPromptTemplates: false,
           preflightResult: (disposition: string) => {

@@ -6,6 +6,16 @@
  *   node scripts/verify-published.mts --version 0.1.1
  *   node scripts/verify-published.mts --tag latest --settle 120   # wait out registry read-replica lag
  *   node scripts/verify-published.mts --tag latest --expect-version 0.1.1
+ *   node scripts/verify-published.mts --tag next  --expect-version 0.1.1 --all
+ *
+ * `--all` extends the check from the CLI to *every* publishable package: each one must exist
+ * at the released version, must have the requested dist-tag pointing at that version, and must
+ * ship the entry points its own manifest advertises. Without it a release proves only that
+ * `@piwebui/pi-web` works, and a package whose `files` allowlist ships nothing usable — or
+ * whose publish was simply missing from the workflow's list — passes unnoticed.
+ * `--allow-missing "<names>"` downgrades the listed packages to a warning; the release
+ * workflow passes the packages it could not publish (no trusted publisher yet) so the run
+ * reports them without failing the packages that did land.
  *
  * `--expect-version` is the assertion that the *tag* actually moved: publishing a version
  * and pointing `latest` at it are two things that can fail independently.
@@ -36,12 +46,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { CLI_NAMES, SERVER_PKG_NAME } from "./cli-names.mts";
+import { publishablePackages } from "./publish-list.mts";
 
 const argv = process.argv.slice(2);
 const flag = (name: string, fallback = ""): string => {
   const i = argv.indexOf(`--${name}`);
   return i >= 0 && argv[i + 1] && !argv[i + 1].startsWith("--") ? argv[i + 1] : fallback;
 };
+const all = argv.includes("--all");
 
 const pkgName = process.env.PIWEB_VERIFY_PKG || SERVER_PKG_NAME;
 const spec = flag("version") ? `${pkgName}@${flag("version")}` : `${pkgName}@${flag("tag", "latest")}`;
@@ -160,3 +172,73 @@ for (const name of CLI_NAMES) {
 }
 
 console.log(`\n${pkgName}@${version} is installable and answers to ${CLI_NAMES.map((n) => `\`${n}\``).join(" and ")}.`);
+
+/**
+ * 5. every other publishable package, so a release is proven for the whole set.
+ *
+ * The tarball inspection is per package: the bridge is a `pi` extension whose whole contract
+ * is the file listed under `pi.extensions`, so a published tarball that omits it installs
+ * cleanly and does nothing at all. The dist-tag check is the one that catches a package that
+ * published but whose tag never moved — the `latest`/`pi-web` incident, in package form.
+ */
+if (all) {
+  const tag = flag("tag");
+  const allowMissing = new Set(flag("allow-missing").split(/\s+/).filter(Boolean));
+  const others = publishablePackages().filter((p) => p.name !== pkgName);
+  const skipped: string[] = [];
+  const viewSettled = async (args: string[]) => {
+    let r = npm(args);
+    for (let waited = 0; r.status !== 0 && waited < settleMs; ) {
+      const step = 10_000;
+      console.log(`   ${args[1]} not visible yet; retrying in ${step / 1000}s`);
+      await sleep(step);
+      waited += step;
+      r = npm(args);
+    }
+    return r;
+  };
+  if (!others.length) ok("--all: no other publishable packages to check");
+  for (const pkg of others) {
+    if (allowMissing.has(pkg.name)) {
+      skipped.push(pkg.name);
+      console.log(` ⚠ ${pkg.name} was not published this run (npm has no trusted publisher registered for it) — not verified`);
+      continue;
+    }
+    const found = await viewSettled(["view", `${pkg.name}@${version}`, "version", "--json"]);
+    if (found.status !== 0) {
+      fail(`--all: ${pkg.name}@${version} is not on the registry (${(found.stdout + found.stderr).trim().slice(0, 200)}) — it was not published, or its publish did not land`);
+    }
+    if (tag) {
+      // `dist-tags.<tag>`, not `<tag>.version`: the latter asks for `.version` on a string
+      // and npm answers with empty output and exit 0, so a query can never fail loudly.
+      const t = await viewSettled(["view", pkg.name, `dist-tags.${tag}`, "--json"]);
+      const got = String(JSON.parse(t.stdout || "null") ?? "");
+      if (t.status !== 0 || got !== version) {
+        fail(`--all: ${pkg.name} dist-tag "${tag}" points at ${got || "nothing"}, not ${version} — that package's tag did not move with the release`);
+      }
+    }
+    const packed = npm(["pack", `${pkg.name}@${version}`, "--pack-destination", tmp]);
+    if (packed.status !== 0) fail(`--all: npm pack ${pkg.name}@${version} failed: ${(packed.stdout + packed.stderr).trim().slice(0, 300)}`);
+    // npm names a scoped tarball after `scope-name-version.tgz`; take the name it printed
+    // instead of rebuilding it (a guessed prefix silently matched nothing).
+    const said = packed.stdout.trim().split("\n").filter(Boolean).pop() ?? "";
+    const tgzPath = said ? path.join(tmp, path.basename(said)) : "";
+    if (!tgzPath || !fs.existsSync(tgzPath)) {
+      fail(`--all: npm pack ${pkg.name}@${version} produced no tarball in ${tmp} (npm said: ${said.slice(0, 120) || "nothing"})`);
+    }
+    const listing = spawnSync("tar", ["tzf", tgzPath], { encoding: "utf8" });
+    const entries = new Set(listing.stdout.trim().split("\n").filter(Boolean).map((l) => l.replace(/^\.\//, "")));
+    const root_ = [...entries][0]?.split("/")[0] ?? "package";
+    const files = [...entries].filter((e) => e.split("/").length > 1);
+    if (!files.length) fail(`--all: the published ${pkg.name} tarball contains nothing but its manifest`);
+    const missing = pkg.piExtensions
+      .map((rel) => rel.replace(/^\.\//, ""))
+      .filter((rel) => !entries.has(`${root_}/${rel}`));
+    if (missing.length) {
+      fail(`--all: ${pkg.name}@${version} advertises pi.extensions ${missing.map((m) => `\`${m}\``).join(", ")} but the published tarball does not contain ${missing.map((m) => `\`${m}\``).join(", ")} — \`pi install\` would resolve a file that is not there`);
+    }
+    ok(`${pkg.name}@${version}${tag ? ` on "${tag}"` : ""}: ${files.length} files${pkg.piExtensions.length ? `, pi extensions present (${pkg.piExtensions.length})` : ""}`);
+  }
+  const checked = others.length - skipped.length;
+  if (checked) console.log(`\n${checked} of ${others.length + 1} publishable packages verified at ${version}${skipped.length ? `; ${skipped.length} skipped (${skipped.join(", ")})` : ""}.`);
+}

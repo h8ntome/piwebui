@@ -465,3 +465,84 @@ button.pw-crumb:hover { background: var(--dsw-alias-interactive-bg-hover); }
   .pw-main__header { padding-left: 8px; padding-right: 12px; }
   .pw-meter__row span:first-child { display: none; }
 }
+
+/* ---------------------------------------------------------------------------
+   Audit refinements: hero anchoring, phone/tablet policy, composer states,
+   panel tabs and resizing, boot screen.
+   --------------------------------------------------------------------------- */
+
+/* The hero used to be centred, leaving ~380px of nothing above it; anchor it at a
+   readable third of the viewport instead (SPAC-03). */
+.pw-main__scroll--hero { justify-content: flex-start; }
+.pw-main__scroll--hero .pw-hero { align-items: flex-start; height: auto; min-height: 100%; padding-top: clamp(48px, 18vh, 180px); }
+
+/* Boot screen: say which address is being tried, keep the raw error one click away (GEN-01/SRV-08). */
+.pw-boot__hint--meta { font-size: 12px; color: var(--pw-label-meta); margin-top: -4px; }
+.pw-boot__details { width: 100%; font-size: 12px; color: var(--pw-label-meta); }
+.pw-boot__details summary { cursor: pointer; list-style: none; }
+.pw-boot__details summary::-webkit-details-marker { display: none; }
+.pw-boot__details .pw-boot__error { margin-top: 6px; }
+
+/* Panel tabs: a real tablist with a visible selected state (PNL-05). */
+.pw-panel__tabs { display: inline-flex; align-items: center; gap: 2px; min-width: 0; }
+.pw-panel__tab {
+  width: 28px; height: 28px; display: inline-grid; place-items: center; cursor: pointer;
+  border: none; background: none; border-radius: var(--dsw-radius-sm);
+  color: var(--dsw-alias-label-tertiary);
+}
+.pw-panel__tab:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
+.pw-panel__tab--active { color: var(--dsw-alias-label-primary); background: var(--dsw-alias-interactive-bg-hover-solid); }
+.pw-panel__header { gap: 8px; }
+
+/* Draggable boundary between the chat and the panel (PNL-06). */
+.pw-panelResize {
+  position: absolute; z-index: 12; top: 0; bottom: 0; left: -3px; width: 7px;
+  cursor: col-resize; background: none; touch-action: none;
+}
+.pw-panelResize::after { content: ""; position: absolute; inset: 0 3px; background: transparent; transition: background .1s; }
+.pw-panelResize:hover::after, .pw-panelResize:focus-visible::after { background: var(--dsw-static-deepseek-450); }
+
+/* Composer: runtime notes stack, are dismissible, and no longer float over the transcript (CTL-10). */
+.pw-composer__notices { display: flex; flex-direction: column; gap: 4px; width: 100%; max-width: var(--dsh-composer-card-max-width); margin-bottom: 4px; }
+.pw-composer__notice { display: flex; align-items: center; gap: 8px; }
+.pw-composer__notice > span { flex: 1; min-width: 0; }
+.pw-composer__hintChip {
+  font-size: 12px; line-height: 22px; padding: 0 8px; border-radius: var(--dsw-radius-sm);
+  color: var(--pw-label-meta); background: var(--dsw-alias-interactive-bg-hover); cursor: default;
+}
+
+/* Read-only sessions get an honest disabled look instead of 50%-opacity live controls (CTL-07). */
+.pw-composer[data-readonly] .pw-composer__card { background: var(--dsw-alias-bg-layer-1); box-shadow: none; border: var(--pw-hairline,.5px) solid var(--dsw-alias-border-l2); }
+.pw-composer[data-readonly] .pw-composer__select:disabled { color: var(--pw-label-meta); opacity: 1; cursor: not-allowed; }
+.pw-composer[data-readonly] .pw-composer__add { cursor: not-allowed; }
+.pw-composer[data-readonly] .pw-composer__send { background: var(--dsw-alias-interactive-bg-hover-solid); color: var(--pw-label-meta); }
+.pw-composer__select:disabled { opacity: 1; color: var(--pw-label-meta); }
+
+/* Phone: the panel is a bottom sheet that never squeezes the chat (MOB-01). */
+.pw-frame[data-phone] .pw-rightCol {
+  position: fixed; top: auto; left: 0; right: 0; bottom: 0;
+  width: 100%; height: min(72dvh, 620px);
+  z-index: 940;
+  border-left: none;
+  border-top: var(--pw-hairline, .5px) solid var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-panel) var(--dsw-radius-panel) 0 0;
+  background: var(--dsw-alias-bg-layer-1);
+  box-shadow: var(--dsw-elevation-prominent);
+}
+.pw-frame[data-phone] .pw-panel__header { min-height: 52px; }
+.pw-frame[data-phone] .pw-panel__actions .pw-iconBtn { width: 40px; height: 40px; }
+.pw-frame[data-phone] .pw-main__composerSeat { padding-bottom: 4px; }
+.pw-frame[data-phone] .pw-composer__card { padding: 6px 10px 8px; }
+.pw-frame[data-phone] .pw-composer__input { min-height: 34px; }
+.pw-frame[data-phone] .pw-main__header { gap: 4px; }
+@media (max-width: 480px) {
+  .pw-utility--wide { display: none; }
+  .pw-crumb { max-width: 132px; }
+}
+/* Touch: give chrome controls a 40px hit area (MOB-03). */
+html[data-input-modality="touch"] .pw-iconBtn { min-width: 34px; min-height: 34px; }
+html[data-input-modality="touch"] .pw-panel__tab { width: 40px; height: 40px; }
+
+/* Tablet (640-900px): a compact labelled rail instead of the icon rail (TAB-01). */
+.pw-frame[data-sidebar-tablet] .pw-row__time { display: none; }
+.pw-frame[data-sidebar-tablet] .pw-nav__title { font-size: 13px; }

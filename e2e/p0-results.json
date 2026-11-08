@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-05T15:40:47.918Z",
+  "generatedAt": "2026-11-08T11:09:01.699Z",
   "piVersion": "1.5.0",
   "rows": [
     {
@@ -36,7 +36,7 @@
       "id": "D-05",
       "name": "pi SessionManager.open rewrites empty (why we never open originals)",
       "status": "PASS",
-      "evidence": "open(copy).size=151 — proves the pure-read rule"
+      "evidence": "open(copy).size=140 — proves the pure-read rule"
     },
     {
       "id": "F-10",
@@ -48,7 +48,7 @@
       "id": "S-12g",
       "name": "giant single record parsed with bound",
       "status": "PASS",
-      "evidence": "2 entries in 8ms"
+      "evidence": "2 entries in 23ms"
     },
     {
       "id": "RR-framing",
@@ -66,7 +66,7 @@
       "id": "P0-B1",
       "name": "managed host boots with real Pi SDK",
       "status": "PASS",
-      "evidence": "piVersion=1.5.0 pid=54834"
+      "evidence": "piVersion=1.5.0 pid=734931"
     },
     {
       "id": "P0-B2",
@@ -96,7 +96,7 @@
       "id": "RR-4",
       "name": "turn_end maps live message to persisted entry id",
       "status": "PASS",
-      "evidence": "entryId=1a787cb3"
+      "evidence": "entryId=89933b1b"
     },
     {
       "id": "P0-B5",
@@ -156,7 +156,7 @@
       "id": "P0-B9",
       "name": "model catalogue secret-free",
       "status": "PASS",
-      "evidence": "63"
+      "evidence": "2"
     },
     {
       "id": "P0-B10",
@@ -168,7 +168,7 @@
       "id": "S-8a",
       "name": "managed dialog routed to browser channel",
       "status": "PASS",
-      "evidence": "{\"requestId\":\"dlg-1\",\"requestGeneration\":1,\"kind\":\"confirm\",\"title\":\"Test gate\",\"message\":\"Approve the test thing?\",\"createdAt\":\"2026-11-05T"
+      "evidence": "{\"requestId\":\"dlg-1\",\"requestGeneration\":1,\"kind\":\"confirm\",\"title\":\"Test gate\",\"message\":\"Approve the test thing?\",\"createdAt\":\"2026-11-08T"
     },
     {
       "id": "S-8b",
@@ -198,7 +198,7 @@
       "id": "S-2/G-4",
       "name": "stopForTerminal: settle -> dispose -> exit -> file complete",
       "status": "PASS",
-      "evidence": "exited=true finalTurn=present; handoff: pi --session /var/folders/sg/dtjynj_90tx0_vs49z2z7t3r0000gn/T/piweb-p0-agent-5aKpJ2/sessions/b1-mw3pp3lh/2026-11-05T15-40-05-281Z_01a1ac5e-0520-71ff-9c0c-cff3fe0fe6c5.jsonl"
+      "evidence": "exited=true finalTurn=present; handoff: pi --session /tmp/piweb-p0-agent-hmNkaI/sessions/b1-mw7qb5cz/2026-11-08T11-08-18-836Z_01a1bad8-4814-7278-aa1a-799b77a45ee0.jsonl"
     },
     {
       "id": "F-04",
@@ -222,7 +222,7 @@
       "id": "G-3",
       "name": "browser controls the same terminal process (PID proof)",
       "status": "PASS",
-      "evidence": "pid 55051: pi"
+      "evidence": "pid 734998: pi"
     },
     {
       "id": "P0-C2",
@@ -258,7 +258,7 @@
       "id": "P0-C6",
       "name": "terminal session flushed; live leaf = file leaf",
       "status": "PASS",
-      "evidence": "leaf=f4915c95 turnEnd=f4915c95"
+      "evidence": "leaf=765bf0a1 turnEnd=765bf0a1"
     },
     {
       "id": "P0-C7",
@@ -354,7 +354,7 @@
       "id": "F-18",
       "name": "/reload replaces bridge runtime (new runtimeId; old artifacts cleaned)",
       "status": "PASS",
-      "evidence": "old runtimeId 71fd09 gone=true"
+      "evidence": "old runtimeId c7c821 gone=true"
     }
   ]
 }

@@ -28,8 +28,8 @@ ok("workspace build (shared, pi-adapter, server, client)");
 const tgzDir = path.join(tmp, "tgz");
 fs.mkdirSync(tgzDir);
 const packs: string[] = [];
-for (const w of ["shared", "pi-adapter", "server"]) {
-  const spec = { shared: "@piwebui/shared", "pi-adapter": "@piwebui/pi-adapter", server: "@piwebui/pi-web" }[w]!;
+for (const w of ["shared", "pi-adapter", "pi-extension", "server"]) {
+  const spec = { shared: "@piwebui/shared", "pi-adapter": "@piwebui/pi-adapter", "pi-extension": "@piwebui/pi-web-bridge", server: "@piwebui/pi-web" }[w]!;
   const r = spawnSync("npm", ["pack", "--pack-destination", tgzDir, "-w", spec], { cwd: ROOT, encoding: "utf8" });
   const file = r.stdout.trim().split("\n").pop() ?? "";
   if (r.status !== 0 || !file) { fail(`npm pack ${spec}`); } else packs.push(path.join(tgzDir, file));

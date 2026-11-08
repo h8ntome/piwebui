@@ -7,6 +7,25 @@ import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 
+/** One row of the `runtimes` table: an attested bridge runtime and its trust state. */
+export interface BridgeRuntimeRow {
+  runtime_id: string;
+  server_id: string | null;
+  pid: number | null;
+  proc_start: number | null;
+  cwd: string | null;
+  pi_version: string | null;
+  protocol: number | null;
+  adapter_version: string | null;
+  caps: string | null;
+  first_seen: number | null;
+  last_seen: number | null;
+  trusted: number;
+  last_error: string | null;
+  dropped_frames: number | null;
+  last_seq: number | null;
+}
+
 export class Store {
   db: DatabaseSync;
   constructor(file: string) {
@@ -32,6 +51,57 @@ export class Store {
     CREATE TABLE IF NOT EXISTS web_sessions(id TEXT PRIMARY KEY, csrf_hash TEXT NOT NULL, created_at INTEGER NOT NULL, last_seen INTEGER NOT NULL);
     DROP TABLE IF EXISTS bootstrap_codes;
     `);
+    // Idempotent column add: SQLite has no `ADD COLUMN IF NOT EXISTS`.
+    const cols = new Set((this.db.prepare("PRAGMA table_info(sessions)").all() as { name: string }[]).map((c) => c.name));
+    if (!cols.has("pi_session_id")) this.db.exec("ALTER TABLE sessions ADD COLUMN pi_session_id TEXT");
+    this.db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_piid ON sessions(pi_session_id) WHERE pi_session_id IS NOT NULL;
+    CREATE TABLE IF NOT EXISTS runtimes(
+      runtime_id TEXT PRIMARY KEY, server_id TEXT, pid INTEGER, proc_start INTEGER, cwd TEXT,
+      pi_version TEXT, protocol INTEGER, adapter_version TEXT, caps TEXT,
+      first_seen INTEGER, last_seen INTEGER, trusted INTEGER DEFAULT 1, last_error TEXT,
+      dropped_frames INTEGER DEFAULT 0, last_seq INTEGER DEFAULT 0);
+    `);
+  }
+
+  /* ---------------- runtime trust list (bridge_plan 03 §3, §4.2) ---------------- */
+
+  runtimeGet(runtimeId: string): BridgeRuntimeRow | undefined {
+    return this.db.prepare("SELECT * FROM runtimes WHERE runtime_id=?").get(runtimeId) as BridgeRuntimeRow | undefined;
+  }
+
+  runtimeUpsert(row: Partial<BridgeRuntimeRow> & { runtime_id: string }): void {
+    const now = Date.now();
+    const existing = this.db.prepare("SELECT first_seen FROM runtimes WHERE runtime_id=?").get(row.runtime_id) as { first_seen: number } | undefined;
+    this.db.prepare(`
+      INSERT INTO runtimes(runtime_id,server_id,pid,proc_start,cwd,pi_version,protocol,adapter_version,caps,first_seen,last_seen,trusted,last_error,dropped_frames,last_seq)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      ON CONFLICT(runtime_id) DO UPDATE SET
+        server_id=excluded.server_id, pid=excluded.pid, proc_start=excluded.proc_start, cwd=excluded.cwd,
+        pi_version=excluded.pi_version, protocol=excluded.protocol, adapter_version=excluded.adapter_version,
+        last_seen=excluded.last_seen, last_error=excluded.last_error
+    `).run(
+      row.runtime_id, row.server_id ?? null, row.pid ?? null, row.proc_start ?? null, row.cwd ?? null,
+      row.pi_version ?? null, row.protocol ?? null, row.adapter_version ?? null, row.caps ?? null,
+      existing?.first_seen ?? now, now, row.trusted ?? 1, row.last_error ?? null, row.dropped_frames ?? 0, row.last_seq ?? 0,
+    );
+  }
+
+  runtimeSetTrusted(runtimeId: string, trusted: boolean): boolean {
+    const r = this.db.prepare("UPDATE runtimes SET trusted=? WHERE runtime_id=?").run(trusted ? 1 : 0, runtimeId);
+    return r.changes > 0;
+  }
+
+  runtimeNoteSeq(runtimeId: string, seq: number): void {
+    this.db.prepare("UPDATE runtimes SET last_seq=MAX(last_seq,?), last_seen=? WHERE runtime_id=?").run(seq, Date.now(), runtimeId);
+  }
+
+  runtimeNoteError(runtimeId: string, error: string): void {
+    this.db.prepare("UPDATE runtimes SET last_error=? WHERE runtime_id=?").run(error.slice(0, 200), runtimeId);
+  }
+
+  runtimeList(): BridgeRuntimeRow[] {
+    return this.db.prepare("SELECT * FROM runtimes ORDER BY last_seen DESC LIMIT 200").all() as unknown as BridgeRuntimeRow[];
   }
   kvGet(key: string): string | undefined {
     const r = this.db.prepare("SELECT value FROM kv WHERE key=?").get(key) as { value: string } | undefined;

@@ -181,26 +181,74 @@ export async function readEntryPage(file: string, cursor: string | null | undefi
   };
 }
 
+/**
+ * Read the LAST `limit` entries that come before the entry `beforeId` (exclusive), i.e. page
+ * *backwards* through a session so a client holding the newest window can walk to the start.
+ * Entry ids are the identity here (not byte offsets): the framer's offsets are chunk-relative
+ * and must not be round-tripped by callers. `olderCursor` is the id of the oldest entry handed
+ * back, or null when the start of the file was reached.
+ */
+export async function readEntryBefore(file: string, beforeId: string, limit: number): Promise<EntryPage & { olderCursor: string | null; diagnostics: { message: string; byteOffset: number }[] }> {
+  const ident = await fileIdentity(file);
+  if (!ident) throw Object.assign(new Error("file not found"), { code: "not_found" });
+  const limitN = Math.max(1, Math.min(1000, limit));
+  const window: EntryView[] = [];
+  const diagnostics: { message: string; byteOffset: number }[] = [];
+  let total = 0;
+  let found = false;
+  await streamRecords(file, {
+    onRecord: (rec) => {
+      const r = decodeRecord(rec, MAX_RECORD_BYTES);
+      if (r.header || !r.entry) {
+        if (r.diagnostic && diagnostics.length < 5) diagnostics.push(r.diagnostic);
+        return;
+      }
+      if (r.entry.entryId === beforeId) {
+        found = true;
+        return;
+      }
+      if (found) return; // entries after the anchor belong to the caller's window already
+      total++;
+      window.push(r.entry);
+      if (window.length > limitN) window.shift();
+    },
+    onDiagnostic: (d) => { if (diagnostics.length < 5) diagnostics.push(d); },
+  });
+  const hasOlder = total > window.length;
+  return {
+    fileGeneration: ident.genId,
+    // An unknown anchor means "nothing before what you hold": hand back nothing rather than a
+    // window of the newest records, which a caller would splice in as if it were history.
+    entries: found ? window : [],
+    nextCursor: null,
+    olderCursor: hasOlder && window.length && found ? window[0]!.entryId : null,
+    leafEntryId: null,
+    entryCount: total,
+    totalBytes: ident.size,
+    diagnostics,
+  };
+}
+
 /** Read the LAST n entries (full pass; used for bounded snapshots of cold files). */
-export async function readEntryTail(file: string, limit: number): Promise<EntryPage> {
+export async function readEntryTail(file: string, limit: number): Promise<EntryPage & { diagnostics: { message: string; byteOffset: number }[] }> {
   const ident = await fileIdentity(file);
   if (!ident) throw Object.assign(new Error("file not found"), { code: "not_found" });
   const window: EntryView[] = [];
   const limitN = Math.max(1, Math.min(1000, limit));
   let count = 0;
-  let diagnostics = 0;
+  const diagnostics: { message: string; byteOffset: number }[] = [];
   await streamRecords(file, {
     onRecord: (rec) => {
       const r = decodeRecord(rec, MAX_RECORD_BYTES);
       if (r.header || !r.entry) {
-        if (r.diagnostic) diagnostics++;
+        if (r.diagnostic && diagnostics.length < 5) diagnostics.push(r.diagnostic);
         return;
       }
       count++;
       window.push(r.entry);
       if (window.length > limitN) window.shift();
     },
-    onDiagnostic: () => diagnostics++,
+    onDiagnostic: (d) => { if (diagnostics.length < 5) diagnostics.push(d); },
   });
   return {
     fileGeneration: ident.genId,
@@ -209,6 +257,7 @@ export async function readEntryTail(file: string, limit: number): Promise<EntryP
     leafEntryId: window.length ? window[window.length - 1]!.entryId : null,
     entryCount: count,
     totalBytes: ident.size,
+    diagnostics,
   };
 }
 
@@ -270,25 +319,64 @@ export async function buildTree(file: string): Promise<TreeView & { diagnostics:
   };
 }
 
+/** User-facing wording for the non-message record types pi writes into a session file. */
+const TREE_ENTRY_LABEL: Record<string, string> = {
+  model_change: "Model change",
+  thinking_level_change: "Thinking level change",
+  compaction: "Context compacted",
+  session_start: "Session started",
+  session_init: "Session started",
+  header: "Session header",
+  custom: "Extension entry",
+  invalid: "Unreadable line",
+};
+
+const BLOCK_LABEL: Record<string, string> = {
+  text: "Text",
+  thinking: "Reasoning",
+  toolCall: "Tool call",
+  toolResult: "Tool result",
+  image: "Image",
+};
+
+function flatten(s: string): string {
+  return s.replace(/```/g, " ").replace(/[*_`~#>|]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function cap(s: string): string {
+  return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+}
+
+function blocksText(content: unknown): string {
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((b) => {
+      const o = b as Record<string, unknown>;
+      return o && o.type === "text" ? String(o.text ?? "") : "";
+    })
+    .join(" ");
+}
+
+/** One-line, human-readable preview for a tree row: no raw markdown, no internal enums. */
 function previewOf(e: Record<string, unknown>): string {
   if (e.type === "message") {
-    const m = e.message as Record<string, unknown> | undefined;
-    const content = m?.content;
-    if (typeof content === "string") return content.slice(0, 160);
+    const m = (e.message ?? {}) as Record<string, unknown>;
+    const role = String(m.role ?? "");
+    const content = m.content;
+    const body = typeof content === "string" ? content : blocksText(content);
+    if (m.isError) return flatten(`Error: ${body}`) || "Error turn";
+    const text = flatten(body);
+    if (text) return text.slice(0, 160);
     if (Array.isArray(content)) {
-      for (const b of content) {
-        if (b && typeof b === "object" && (b as Record<string, unknown>).type === "text") {
-          return String((b as Record<string, unknown>).text ?? "").slice(0, 160);
-        }
-        if (b && typeof b === "object" && (b as Record<string, unknown>).type === "toolResult") {
-          return `[toolResult ${String((b as Record<string, unknown>).toolCallId ?? "").slice(0, 20)}]`;
-        }
-      }
-      const first = content[0] as Record<string, unknown> | undefined;
-      return `[${String(first?.type ?? "?")}]`;
+      const kinds = [...new Set(content.map((b) => String((b as Record<string, unknown>)?.type ?? "")).filter(Boolean))];
+      if (kinds.length) return kinds.map((k) => BLOCK_LABEL[k] ?? cap(k)).join(" · ");
     }
+    return role ? `${cap(role)} (no text)` : "Empty message";
   }
-  return String(e.type ?? "");
+  const known = TREE_ENTRY_LABEL[String(e.type ?? "")];
+  if (known) return known;
+  const t = String(e.type ?? "");
+  return t ? cap(t.replace(/[_-]+/g, " ")) : "Entry";
 }
 
 export interface SessionSummary {
