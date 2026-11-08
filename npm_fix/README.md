@@ -124,7 +124,7 @@ $ echo $?
 so scripts and humans both read that as "it ran". (The current tree exits `2` with
 `unknown command: doctor` — fixed as part of the CLI rebuild, another thing `latest` did not have.)
 
-## 3b. Root cause D — a correct release can still install as the old one (packument cache)
+## 4. Root cause D — a correct release can still install as the old one (packument cache)
 
 Found *after* the fix shipped, while verifying it, and the reason a user can report "I reinstalled and
 it is still broken" minutes after everything was correct on the registry:
@@ -152,7 +152,7 @@ also bit the release gate itself: `verify:published` installed `0.1.0` from a wa
 release that was fine, which is why every registry read in that script now passes `--prefer-online`
 (`PIWEB_VERIFY_USE_CACHE=1` restores the old behaviour for debugging).
 
-## 4. Everything else checked, and what ruled it out
+## 5. Everything else checked, and what ruled it out
 
 Each row is a candidate cause for "the new package/command is not recognised", checked in this
 session against the live registry or a scratch prefix.
@@ -175,7 +175,7 @@ session against the live registry or a scratch prefix.
 | tag/manifest version mismatch refusing the release | ruled out | all four publishable manifests at `0.1.1`; `Refuse a tag that does not match the manifests` passes for `v0.1.1` |
 | lockfile/manifest drift (`npm ci` failing, so CI never publishes) | ruled out | `npm ci` clean; `npm run build`, `test:unit`, `package:smoke` all green on this tree |
 
-## 5. The fix
+## 6. The fix
 
 **Ship the documented command as a real release, then make every layer of this drift fail loudly.**
 
@@ -216,7 +216,7 @@ session against the live registry or a scratch prefix.
    bootstrap hand-publish must use a scratch version, never a number a released sibling already used).
    `docs/CHECKS.md`, `CHANGELOG.md` and this file record the verification.
 
-## 6. Verification
+## 7. Verification
 
 | Check | Result |
 | --- | --- |
@@ -234,7 +234,7 @@ session against the live registry or a scratch prefix.
 | `registry drift` workflow, re-run after the release (run 42486570361) | **green** — same run that was red 22 minutes earlier on the same code path: `release set on "latest" is one cut: 4 packages at 0.1.1, published within 4 min`, `12 documented subcommands dispatch in the published dist/main.js` |
 | Cause D reproduced after the fix (warm cache) | `npm i -g --prefix /tmp/t1 @piwebui/pi-web@latest` → `0.1.0` / `piweb` only; with `--prefer-online` → `0.1.1` / both names; after `npm cache clean --force` → `0.1.1`. Registry headers: `cache-control: public, max-age=300`, `age: 197` |
 
-## 7. If you are hitting this on a Mac right now
+## 8. If you are hitting this on a Mac right now
 
 ```bash
 # what do you actually have, and what does npm think latest is?
@@ -263,7 +263,7 @@ If `latest` has not been cut yet, `@next` is the same code as `main`. If you pub
 ago and your terminal still shows the old one, that is npm's read replica and/or your local
 packument cache: `npm view --prefer-online` or `npm cache clean --force`.
 
-## 8. For the next agent editing this
+## 9. For the next agent editing this
 
 **Invariants, all of them broken at least once in this repository's history:**
 
