@@ -48,6 +48,23 @@ pure-read stats. See script for exact assertions S1–S20.
 - `tsc` clean on shared, pi-adapter, server, client (strict; exactOptionalPropertyTypes).
 - okhsl conversion vendored from pi's MIT Oklab math; parity-checked against pi theme JSON.
 
+## Automated — release and registry gates
+
+The failure these exist for: a green build, a green publish, and a user who still cannot type the
+command. Full story in [`../npm_fix/README.md`](../npm_fix/README.md).
+
+| Check | What it proves | Last pass |
+|---|---|---|
+| `npm run check:cli` | tree side: `bin` = declared names, launcher present + shebang'd + inside `files`, every command-like token and every `pi-web <subcommand>` in the docs shipped and dispatched (docs = README, MAINTAINERS, CHANGELOG, `docs/**` minus `docs/research/`, `packages/<pkg>/README.md`) | 2026-11-08 |
+| `npx tsx --test scripts/test/cli-names.test.mts` | the parsers above actually match (a silent parser is a gate that passes on the bug) — 6 tests, fixtures in temp trees | 2026-11-08 |
+| `npm run package:smoke` | artifact side: pack → clean install → `packed bins: pi-web, piweb` → boot → `--version`/`--help`/bad-flag exit 2/`--port 0` → real `npm i -g` into a scratch prefix → installed server answers `/api/v1/health` | 2026-11-08 (`0.1.1`) |
+| `npm run verify:published -- --tag latest --all` | registry side: the four packages are **one release** (same version, published within one 6h window), `bin` declares the documented names, the tarball carries the launcher + `dist/main.js` + `client-dist/index.html`, `npm i -g` lands a working `pi-web`/`piweb --version`, and the published `dist/main.js` dispatches every documented subcommand | 2026-11-08 (`next` green; `latest` red by design until `v0.1.1`) |
+| `registry drift` workflow | the registry side, re-run daily with no publish in front of it | first run 2026-11-08: **FAIL**, naming the 18h `latest` skew — the alarm working |
+
+Negative tests of the gates themselves (scratch trees, same day): dropping `pi-web` from `bin` → 3
+failures; documenting a subcommand the dispatcher dropped → 1 failure; `pi_web` typo in a fenced
+block → failure; undeclared `bin` name → failure. Each exits 1.
+
 ## Automated — browser UI pass (agent-browser, headless Chromium)
 
 Dated 2026-11-06 against the warm server on loopback:

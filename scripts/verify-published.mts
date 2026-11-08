@@ -95,6 +95,18 @@ const fail = (m: string): never => {
 
 const npm = (args: string[], cwd?: string) =>
   spawnSync("npm", args, { cwd, encoding: "utf8", env: process.env, timeout: 600_000 });
+/**
+ * Every read here bypasses the packument cache, and it has to.
+ *
+ * The registry answers the abbreviated packument with `cache-control: public, max-age=300`, npm
+ * caches it for that long, and npm's own read replicas disagree with each other for a comparable
+ * window — so minutes after a correct publish, `npm i -g @piwebui/pi-web@latest` was still
+ * installing `0.1.0` from a warm cache while `npm view` answered `0.1.1`. A release gate that
+ * measures what npm *remembers* goes red on a release that is fine (it did, twice, in the session
+ * that wrote this), and a user with the same warm cache is the other half of the same story: see
+ * `npm_fix/README.md` §4 "stale packument cache".
+ */
+const FRESH = process.env.PIWEB_VERIFY_USE_CACHE ? [] : ["--prefer-online"];
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const settleMs = Math.max(0, Number(flag("settle", "0") || 0)) * 1000;
 // One deadline for every lag wait in the run, so `--settle 300` means "spend at most 5
@@ -113,24 +125,24 @@ const mayStillBeLagging = (out: string) => LAGGED.test(out) && Date.now() < lagD
  * dependency that exists. The version lookup in step 1 says nothing about that.
  */
 const waitForVersion = async (target: string, why: string) => {
-  let r = npm(["view", target, "version", "--json"]);
+  let r = npm(["view", target, "version", "--json", ...FRESH]);
   while (r.status !== 0 && Date.now() < lagDeadline) {
     const step = 15_000;
     console.log(`   ${target} not resolvable yet (${why}); retrying in ${step / 1000}s`);
     await sleep(step);
-    r = npm(["view", target, "version", "--json"]);
+    r = npm(["view", target, "version", "--json", ...FRESH]);
   }
   return r.status === 0;
 };
 
 /** `npm view` that keeps retrying while the read replica could still come good. */
 const viewSettled = async (args: string[]) => {
-  let r = npm(args);
+  let r = npm([...args, ...FRESH]);
   while (r.status !== 0 && Date.now() < lagDeadline) {
     const step = 15_000;
     console.log(`   ${args[1]} not visible yet; retrying in ${step / 1000}s`);
     await sleep(step);
-    r = npm(args);
+    r = npm([...args, ...FRESH]);
   }
   return r;
 };
@@ -213,7 +225,7 @@ console.log(`verifying ${pkgName} ${label} from ${process.env.npm_config_registr
 // waited out, or a perfectly good release is reported as a missing one.
 let manifest: { version?: string; bin?: Record<string, string> | string; dependencies?: Record<string, string> } = {};
 let version = "";
-let out = npm(["view", spec, "--json"]);
+let out = npm(["view", spec, "--json", ...FRESH]);
 for (; ; ) {
   const err0 = `${out.stdout}${out.stderr}`;
   let why = "";
@@ -240,7 +252,7 @@ for (; ; ) {
   const step = 15_000;
   console.log(`   ${why}; npm read replica lags the write, retrying in ${step / 1000}s`);
   await sleep(step);
-  out = npm(["view", spec, "--json"]);
+  out = npm(["view", spec, "--json", ...FRESH]);
 }
 // `bin` may be a bare string (`"bin": "./cli.js"`), in which case npm names the command
 // after the package, which is never what our docs promise.
@@ -270,7 +282,7 @@ for (const name of CLI_NAMES) {
 ok(`bin map declares ${CLI_NAMES.map((n) => `\`${n}\``).join(", ")}`);
 
 // 4. is each declared target actually inside the shipped tarball?
-const packed = npm(["pack", spec, "--pack-destination", tmp]);
+const packed = npm(["pack", spec, "--pack-destination", tmp, ...FRESH]);
 if (packed.status !== 0) fail(`npm pack ${spec} failed: ${(packed.stdout + packed.stderr).trim().slice(0, 400)}`);
 const tarball = fs.readdirSync(tmp).filter((f) => f.endsWith(".tgz")).map((f) => path.join(tmp, f))[0];
 if (!tarball) fail(`npm pack ${spec} produced no .tgz in ${tmp}`);
@@ -310,13 +322,13 @@ for (const dep of internal) {
 // The canary manifest pins its internal deps to the canary version, so this install fails
 // with ETARGET while the replica still serves the dependency graph from before the publish —
 // the same lag as step 1, one layer down, and it takes the whole install with it.
-let ins = npm(["install", "-g", "--no-audit", "--no-fund", "--prefix", prefix, spec]);
+let ins = npm(["install", "-g", "--no-audit", "--no-fund", ...FRESH, "--prefix", prefix, spec]);
 for (let n = 0; ins.status !== 0 && mayStillBeLagging(`${ins.stdout}${ins.stderr}`); n++) {
   const step = 15_000;
   const code = /npm error code (\w+)/.exec(`${ins.stdout}${ins.stderr}`)?.[1] ?? "lag";
   console.log(`   global install hit registry lag (${code}#${n + 1}); retrying in ${step / 1000}s`);
   await sleep(step);
-  ins = npm(["install", "-g", "--no-audit", "--no-fund", "--prefix", prefix, spec]);
+  ins = npm(["install", "-g", "--no-audit", "--no-fund", ...FRESH, "--prefix", prefix, spec]);
 }
 if (ins.status !== 0) fail(`npm install -g ${spec} failed: ${(ins.stdout + ins.stderr).trim().slice(-500)}`);
 ok(`npm i -g ${spec} installed`);
@@ -403,7 +415,7 @@ if (all) {
         fail(`--all: ${pkg.name} dist-tag "${tag}" points at ${got || "nothing"}, not ${version} — that package's tag did not move with the release`);
       }
     }
-    const packed = npm(["pack", `${pkg.name}@${version}`, "--pack-destination", tmp]);
+    const packed = npm(["pack", `${pkg.name}@${version}`, "--pack-destination", tmp, ...FRESH]);
     if (packed.status !== 0) fail(`--all: npm pack ${pkg.name}@${version} failed: ${(packed.stdout + packed.stderr).trim().slice(0, 300)}`);
     // npm names a scoped tarball after `scope-name-version.tgz`; take the name it printed
     // instead of rebuilding it (a guessed prefix silently matched nothing).

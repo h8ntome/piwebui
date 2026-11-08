@@ -74,12 +74,48 @@ publish — fails when:
   name at anything other than `bin/pi-web.mjs`;
 - a declared `bin` target is absent or excluded by the `files` allowlist (npm would install a
   dangling symlink);
-- a fenced code block in `README.md`, `MAINTAINERS.md`, `CHANGELOG.md` or `docs/**` runs a
-  command-like token that the package does not ship — docs typos like `pi_web` included.
+- a fenced code block in `README.md`, `MAINTAINERS.md`, `CHANGELOG.md`, `docs/**` (except
+  `docs/research/`, which quotes other people's CLIs) or `packages/<pkg>/README.md` runs a
+  command-like token that the package does not ship — docs typos like `pi_web` included;
+- a fenced code block runs `pi-web <subcommand>` that `packages/server/src/main.ts` never
+  dispatches — the same drift one level down: `0.1.0` has no `doctor`, `install-extension`, `pair`
+  or `rotate-bridge-token`, so every bridge instruction in the README landed on usage text.
 
 Add a name in three places or not at all: `scripts/cli-names.mts`, `bin` in
 `packages/server/package.json`, and the README CLI table. That rule exists because the `latest`
 artifact on npm shipped without the documented command and nothing compared the two.
+
+The tree side proves the tree. `npm run verify:published` proves the registry, and is the half that
+matters to a stranger: it resolves a dist-tag against the live registry, checks the *published*
+manifest's `bin` map and the *published* `dist/main.js` against these same docs, packs the tarball,
+installs it into a scratch global prefix and runs `pi-web --version` / `piweb --version` from an
+unrelated cwd. The release workflow runs it as its last step; `.github/workflows/registry-drift.yml`
+runs it every day with no publish in front of it, because the failure mode here is not a bad build —
+it is a good build that never became what `latest` serves.
+
+### A release is a set, not a package
+
+The four publishable packages share one version number by construction (the workflow refuses to
+publish otherwise), and a user's install spans two of them: `npm i -g @piwebui/pi-web` plus
+`pi install npm:@piwebui/pi-web-bridge`. So the tags must move together or the product is incoherent
+no matter how good each artifact is.
+
+They did not. `@piwebui/pi-web@0.1.0` was published 2026-11-07 17:08, *before the terminal bridge
+existed*; `@piwebui/pi-web-bridge@0.1.0` was hand-published 2026-11-08 11:25 to bootstrap trusted
+publishing. Same version string, 18 hours and one whole feature apart, both on `latest`: the bridge
+dials `~/.pi-web/bridge.json` and a per-server Unix socket, and the `0.1.0` server has no descriptor
+and opens no such socket. Every per-package check passed. This is why:
+
+- `verify-published.mts --all` requires the dist-tag to name one version across all four packages
+  **and** requires that version to have been published inside one window (6h default,
+  `--set-window-hours`). It runs as its step 2, before anything is installed, because it is the
+  cheapest check here and it explains every other failure of this shape.
+- a package that needs a one-time hand-publish gets a **scratch version**, never a number that a
+  released sibling already used. The bootstrap exists to create the package and register a trusted
+  publisher; whatever it uploads becomes `latest` for that name.
+- if a set ever splits again, the repair is a normal release cut that moves every tag at once — not
+  `npm dist-tag add` by hand, which would point `latest` at artifacts that were never tested
+  together.
 
 | push | version | dist-tag | install |
 | --- | --- | --- | --- |
@@ -115,12 +151,22 @@ package that did not move — fails the run instead of sitting on the tag.
 
 ### Release state worth remembering
 
-`0.1.0` on npm is broken for the documented workflow and cannot be repaired: it was published before
-`pi-web` was restored as the command name, so its `bin` map ships only `piweb`, and npm versions are
-immutable. Every `npm install -g @piwebui/pi-web` against that artifact ends with
-`zsh: command not found: pi-web`. Cutting `v0.1.1` from bumped manifests is what moves `latest` onto
-an artifact that answers to `pi-web`; until that tag is pushed, `npm i -g @piwebui/pi-web@next` (the
-canary built from `main`) is the artifact that has it.
+**`v0.1.1` is released (2026-11-08) and `latest` is a coherent set**: all four packages at `0.1.1`,
+published within four minutes, `bin` = `pi-web` + `piweb`, and the terminal bridge is in the server
+artifact for the first time. `npm i -g @piwebui/pi-web` then `pi-web` works, and
+`npm run verify:published -- --tag latest --expect-version 0.1.1 --all` passes.
+
+`0.1.0` stays on npm, broken and unrepairable (versions are immutable): it was published before
+`pi-web` was restored as the command name, so its `bin` map ships only `piweb`, and it predates the
+bridge entirely while `@piwebui/pi-web-bridge@0.1.0` — hand-published 18 hours later — did not. Never
+try to repair a published version; the only lever is a newer one on the tag. Full incident record:
+[`npm_fix/README.md`](npm_fix/README.md).
+
+One consequence worth knowing when someone reports "I installed it and it is still the old one": npm
+caches the packument (`cache-control: public, max-age=300`) and npm's read replicas lag, so a correct
+release can install as the previous version for minutes. `--prefer-online` or
+`npm cache clean --force` fixes it; every registry read in `verify-published.mts` uses
+`--prefer-online` for exactly that reason.
 
 `pi-web` as a *command name* is also used by the unrelated unscoped `pi-web` package on npm. That is
 why `piweb` stays shipped: it is the escape hatch when the other package already owns the symlink in

@@ -1,5 +1,13 @@
 # `npm install -g @piwebui/pi-web` → `zsh: command not found: pi-web`
 
+> **Update 2026-11-08 (later the same day): done.** `v0.1.1` is published and `latest` is one
+> coherent set again (`pi-web` + `piweb`, bridge included); the three commands listed at the bottom
+> of this file were run, and `verify:published --tag latest --expect-version 0.1.1 --all` passes.
+> That pass also found two things this write-up could not see from the tree — `latest` was not one
+> release at all (the bridge's `0.1.0` was hand-published 18 h after the server's), and a warm npm
+> packument cache can install the old artifact after a good publish. Both are documented, gated and
+> dated in [`README.md`](README.md); read that file for the current state.
+
 Logged on `hadi@MacBook-Air` in `npm_fix/npm_install_error.md`. Reproduced, root-caused, fixed, and
 guarded on 2026-11-08.
 

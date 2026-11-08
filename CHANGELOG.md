@@ -161,6 +161,33 @@ releases are back-filled below — each release cut replaces the `Unreleased` se
 
 ### Fixed
 
+- **`latest` was not one release.** All four publishable packages answered `0.1.0` for `latest`, but
+  three of them were published on 2026-11-07 and `@piwebui/pi-web-bridge@0.1.0` on 2026-11-08 — the
+  one-time hand-publish that had to happen to register a trusted publisher reused a version number a
+  released sibling had already used. A user who followed the README got `@piwebui/pi-web@0.1.0`, a
+  server with no terminal bridge at all (zero references to `bridge.json`; its pairing command was
+  the legacy `print-bridge-command`), next to the new dial-mode bridge that dials a socket that
+  server never opens: the bridge installs, loads, and the terminal `pi` never appears. Same version
+  number, 18 hours apart, invisible to every per-package check. `npm run verify:published -- --all`
+  now requires the whole set to be on one version *and* that version to have been published inside
+  one window (`--set-window-hours`, 6h default), as its first registry check; cutting `v0.1.1`
+  moved every tag together. Rule for the future: a bootstrap hand-publish gets a scratch version
+  (`0.0.0-stage`), never a number a released sibling used.
+- **The published CLI was missing subcommand coverage of the command gate.** `0.1.0` dispatches only
+  `serve, allow, workspaces, mint-code, mint-token, revoke-token, logout-all, install-bridge,
+  print-bridge-command`, so every `pi-web doctor` / `install-extension` / `pair` /
+  `rotate-bridge-token` / `trust-runtime` in the README landed on usage text — and `0.1.0` answered
+  an unknown subcommand with exit **0**, so it looked like it ran. `npm run check:cli` now fails when
+  a fenced docs block runs a subcommand the dispatcher does not have, and `npm run verify:published`
+  checks the subcommands the docs promise against the *published* `dist/main.js` (self-disabling once
+  main's manifests run ahead of the release, so normal main-vs-stable lead is never read as drift).
+- **Nothing watched `latest` after a release shipped.** The morning's fix was real and the report
+  stayed open for a day anyway, because the tree was correct and the registry was not, and no job
+  compared them. `.github/workflows/registry-drift.yml` runs daily (and on demand, and whenever the
+  release scripts change): `check:cli` plus `verify:published --tag latest --all --settle 300`, then
+  prints what every package's `latest` resolves to, so the next occurrence is a red run rather than
+  another user's bug report.
+
 - **`npm install -g @piwebui/pi-web` installed no `pi-web` command.** The install finished (176
   packages, no error) and then `pi-web` was `command not found`, because the artifact on the `latest`
   dist-tag — `0.1.0` — was published from a manifest whose `bin` map had been renamed to `piweb`

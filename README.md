@@ -61,22 +61,43 @@ npx pi-web                     # or: node packages/server/bin/pi-web.mjs
 <details>
 <summary><code>pi-web: command not found</code> after a global install</summary>
 
-Two unrelated causes; the first is the one people hit, and it is version-specific rather than a
-PATH problem. Ask npm what your installed artifact actually declares:
+Three unrelated causes, in the order people actually hit them. None of them is your shell config
+first — ask npm what your *installed artifact* declares:
 
 ```bash
-npm ls -g @piwebui/pi-web        # the version you have
-npm view @piwebui/pi-web bin     # the commands that version ships on PATH
-piweb --version                  # the older name; works on every version
+npm ls -g @piwebui/pi-web                     # the version you have
+npm view @piwebui/pi-web dist-tags            # what a new install would get
+npm view @piwebui/pi-web bin                  # the commands that version ships on PATH
+piweb --version                               # the older name; works on every version
 ```
 
 - **The installed version predates the command name.** `0.1.0` shipped only the `piweb` alias, so
-  the install succeeds and `pi-web` is still missing — check with `npm view @piwebui/pi-web bin`
-  before hunting through your shell config. Update and you get both names:
+  the install succeeds and `pi-web` is still missing. Check with `npm view @piwebui/pi-web bin`
+  before hunting through your dotfiles:
 
   ```bash
-  npm install -g @piwebui/pi-web@latest
+  npm install -g @piwebui/pi-web@latest   # 0.1.1 and newer ship both names
+  npm install -g @piwebui/pi-web@next     # a canary build, if latest has not been cut yet
   ```
+
+- **Your install is fine but the registry is serving a mixed set.** These four packages release
+  together; if `latest` on one of them lags, `npm i -g @piwebui/pi-web` and
+  `pi install npm:@piwebui/pi-web-bridge` land on two code states that never shipped together and
+  the bridge silently never connects. Compare them, and look at the dates:
+
+  ```bash
+  for p in pi-web pi-web-bridge shared pi-adapter; do
+    printf "%-14s latest=%-8s %s\n" "$p" \
+      "$(npm view @piwebui/$p dist-tags.latest)" \
+      "$(npm view @piwebui/$p time --json | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const t=JSON.parse(s);const v=Object.keys(t).pop();console.log(v,t[v])})")"
+  done
+  ```
+
+  Same version string is not the same release: `@piwebui/pi-web@0.1.0` (2026-11-07, no bridge at
+  all) and `@piwebui/pi-web-bridge@0.1.0` (2026-11-08, the dial-mode bridge) both sat on `latest`.
+  Also worth knowing: npm's registry read replicas and your local packument cache can both answer
+  with yesterday's `latest` for a few minutes — `npm view --prefer-online`, or
+  `npm cache clean --force`, if you *just* published.
 
 - **Your npm global bin directory is not on `PATH`.** Ask npm where it put the command and add that
   directory to your shell's `PATH`:
@@ -87,17 +108,78 @@ piweb --version                  # the older name; works on every version
   ```
 
 One more collision to know about: the unrelated package named `pi-web` on npm also installs a
-`pi-web` command, so if you installed that one globally first, `npm i -g @piwebui/pi-web` can fail
-with `EEXIST` on the symlink. Uninstall the other package, or use this package's `piweb` command.
+`pi-web` command, so if you installed that one globally first, `npm i -g @piwebui/pi-web` fails with
+`EEXIST: file already exists` on the symlink. Repair it by removing the other package, then
+reinstalling this one (`--force` clobbers the other package's launcher, so prefer the uninstall):
+
+```bash
+npm ls -g pi-web && npm rm -g pi-web    # the *unscoped* one, not @piwebui/pi-web
+npm install -g @piwebui/pi-web
+```
+
+Or keep both and use this package's `piweb` command.
 
 The launcher itself never needs a build step: `bin/pi-web.mjs` runs the compiled `dist/main.js`
 shipped in the tarball, and falls back to the TypeScript sources through `tsx` in a checkout.
+`npm_fix/README.md` is the full incident record behind all of this.
 
 </details>
 
 Requirements: Node.js **≥ 22.19**, and `pi` **1.5.0** on the machine. pi-web is pinned to that pi
 version and fails closed: if the resolved pi is not the validated one, runtime-facing features are
 disabled rather than guessed at.
+
+## Add the bridge to pi (control a terminal `pi` from the browser)
+
+Browsing history works out of the box. To make a `pi` you run **in a terminal** show up live —
+streaming thinking, tool calls and answers, and accepting prompts from the browser — add one pi
+extension, once:
+
+```bash
+pi install npm:@piwebui/pi-web-bridge
+```
+
+Then start both sides normally. Nothing else:
+
+```bash
+pi-web          # terminal 1 — prints the URL, publishes ~/.pi-web/bridge.json
+pi              # terminal 2, in any project — listed as "Terminal (bridged)" within ~2 s
+```
+
+No token to copy, no `PIWEB_BRIDGE_TOKEN`, no `pi -e <path>`, no `pi-web allow` for bridged
+sessions, and no restart of a `pi` that is already running (it joins at its next `/reload` or on the
+retry tick, ≤ 15 s). `/new`, `/resume`, `/fork` and `/reload` inside `pi` keep it working.
+
+### Other ways to install the same thing
+
+All four are equivalent and all are zero-config afterwards:
+
+| Situation | Command |
+| --- | --- |
+| Normal (recommended) | `pi install npm:@piwebui/pi-web-bridge` |
+| Try it once, change nothing | `pi -e npm:@piwebui/pi-web-bridge` |
+| From a repo checkout / offline | `pi install ./packages/pi-extension` |
+| No `pi` CLI available | `pi-web install-extension` (copies it into `~/.pi/agent/extensions/`, deletes any legacy `pi-web-bridge.mjs`) |
+
+It is an ordinary [pi package](https://github.com/badlogic/pi-mono) — zero dependencies, Node
+builtins only, so it loads even with `PI_OFFLINE=1`. Remove it with
+`pi remove npm:@piwebui/pi-web-bridge` (or `rm ~/.pi/agent/extensions/pi-web-bridge.js`); the bridge
+writes no files, sockets or pid records of its own.
+
+### Prove it is wired up
+
+* `pi list` shows the bridge in the package list (it lives in `~/.pi/agent/settings.json` under
+  `packages`);
+* in `pi`: a `● pi-web · 1 viewer · <serverId>` line in the footer, and `/piweb` prints the session,
+  the viewers and dropped-frame counts — or, if it is not connected, the reason and the command that
+  fixes it;
+* on the server: `pi-web doctor` (add `--json`), `GET /api/v1/runtimes`,
+  `GET /api/v1/bridge/diagnose`;
+* in the browser: the session badge says `live` with the pid, and the composer accepts input.
+
+Turn it off per terminal with `pi --no-pi-web-bridge` or for the whole process with
+`PIWEB_BRIDGE_DISABLE=1`; see [`packages/pi-extension/README.md`](packages/pi-extension/README.md)
+for every knob and for the honest limits (terminal dialogs are answered **in the terminal**).
 
 ## What you can do
 
@@ -129,24 +211,22 @@ disabled rather than guessed at.
 | `@piwebui/shared` | types, schemas, wire frames, colour math |
 | `@piwebui/client` | the React client, built into `@piwebui/pi-web` |
 
-### Bridging a terminal `pi`
+### How the connection works
 
 ```bash
-pi install npm:@piwebui/pi-web-bridge     # once, ever
+pi install npm:@piwebui/pi-web-bridge      # once, ever
 pi-web                                     # then, as usual
-pi                                         # in any project: it shows up live in the browser
+pi                                         # any project: it shows up live in the browser
 ```
 
 The direction matters and is the whole design: **the terminal dials pi-web**, not the other way
 around. `pi-web serve` publishes `~/.pi-web/bridge.json` (`0600`: socket path + token) and listens
 on one Unix socket per server; each `pi` finds that descriptor and connects to it. That is why a
 `pi` that started *before* `pi-web` still connects (≤ 15 s), why nothing has to be cleaned up after
-a `kill -9`, and why a second server on the same machine never fights over a socket.
-
-Inside `pi` the bridge is visible: a `● pi-web · 1 viewer · <serverId>` footer status and a `/piweb`
-command that prints the session, the viewers, dropped-frame counts — or, when it is not connected,
-the reason and the command that fixes it. `pi-web doctor` does the same from the server side, and
-`GET /api/v1/runtimes` / `GET /api/v1/bridge/diagnose` expose it to the UI.
+a `kill -9`, and why a second server on the same machine never fights over a socket. Identity is
+pi's own `sessionId`, so a brand-new session is adopted as `live` before its file exists, and the
+socket belongs to the process rather than to one extension instance, which is what lets session
+switches keep working. `bridge_plan/` holds the audit and the design.
 
 Session reads happen in a separate **read worker** that only sees allowlisted roots and opens files
 read-only. Live state reaches the browser over SSE with replay and resync. Commands are validated
