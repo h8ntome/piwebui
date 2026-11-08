@@ -224,6 +224,8 @@ session against the live registry or a scratch prefix.
 | `v0.1.1` tag publish (`release.yml`, run 42485393540) | **success** — tag/manifest check, build, `package:smoke`, all four published to `latest`, then `verify:published --version 0.1.1 --all` and `--tag latest --expect-version 0.1.1 --all` |
 | `npm run verify:published -- --tag latest --expect-version 0.1.1 --all` (from this box, after the release) | **pass** — `release set on "latest" is one cut: 4 packages at 0.1.1, published within 4 min`; `bin map declares pi-web, piweb`; tarball has launcher + `dist/main.js` + `client-dist/index.html` (97 files); `npm i -g` → `pi-web --version` = `pi-web 0.1.1` and `piweb --version` = `pi-web 0.1.1`; **12 documented subcommands dispatch in the published `dist/main.js`**; shared/adapter/bridge verified at `0.1.1` |
 | The reported commands, verbatim, in a scratch prefix | `npm install -g @piwebui/pi-web` → `added 176 packages`; `ls bin` → `pi-web  piweb`; `pi-web --version` → `pi-web 0.1.1`; `pi-web doctor --json` → real JSON report (a command `0.1.0` did not have) |
+| `registry drift` workflow, re-run after the release (run 42486570361) | **green** — same run that was red 22 minutes earlier on the same code path: `release set on "latest" is one cut: 4 packages at 0.1.1, published within 4 min`, `12 documented subcommands dispatch in the published dist/main.js` |
+| Cause D reproduced after the fix (warm cache) | `npm i -g --prefix /tmp/t1 @piwebui/pi-web@latest` → `0.1.0` / `piweb` only; with `--prefer-online` → `0.1.1` / both names; after `npm cache clean --force` → `0.1.1`. Registry headers: `cache-control: public, max-age=300`, `age: 197` |
 
 ## 7. If you are hitting this on a Mac right now
 
