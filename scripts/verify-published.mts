@@ -72,6 +72,12 @@ const npm = (args: string[], cwd?: string) =>
   spawnSync("npm", args, { cwd, encoding: "utf8", env: process.env, timeout: 600_000 });
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const settleMs = Math.max(0, Number(flag("settle", "0") || 0)) * 1000;
+// One deadline for every lag wait in the run, so `--settle 300` means "spend at most 5
+// minutes total outlasting the replica", never "5 minutes per phase".
+const lagDeadline = Date.now() + settleMs;
+const LAGGED = /ETARGET|E404|NO MATCH FOUND|NOT FOUND|404/i;
+/** True while the registry could still legitimately come good on this version. */
+const mayStillBeLagging = (out: string) => LAGGED.test(out) && Date.now() < lagDeadline;
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "piweb-verify-"));
 process.on("exit", () => fs.rmSync(tmp, { recursive: true, force: true }));
@@ -85,9 +91,8 @@ console.log(`verifying ${pkgName} ${label} from ${process.env.npm_config_registr
 // waited out, or a perfectly good release is reported as a missing one.
 let manifest: { version?: string; bin?: Record<string, string> | string } = {};
 let version = "";
-const view = (args: string[]) => npm(args);
-let out = view(["view", spec, "--json"]);
-for (let waited = 0; ; ) {
+let out = npm(["view", spec, "--json"]);
+for (; ; ) {
   const err0 = `${out.stdout}${out.stderr}`;
   let why = "";
   if (out.status !== 0) {
@@ -104,17 +109,16 @@ for (let waited = 0; ; ) {
     if (expectVersion && version !== expectVersion) why = `${label} still resolves to ${version}, not the ${expectVersion} that was just published`;
   }
   if (!why) break;
-  if (waited >= settleMs) {
+  if (Date.now() >= lagDeadline) {
     if (why.startsWith("the registry has no")) {
       fail(`${why} — nothing is published under ${label}, so \`npm i -g\` has nothing to install. ${err0.trim().slice(0, 300)}`);
     }
-    fail(`${why} — after ${Math.round(settleMs / 1000)}s of retrying the tag has not moved (or it moved to an older version).`);
+    fail(`${why} — the tag has not moved after ${Math.round(settleMs / 1000)}s of retrying (or it moved to an older version).`);
   }
   const step = 15_000;
   console.log(`   ${why}; npm read replica lags the write, retrying in ${step / 1000}s`);
   await sleep(step);
-  waited += step;
-  out = view(["view", spec, "--json"]);
+  out = npm(["view", spec, "--json"]);
 }
 // `bin` may be a bare string (`"bin": "./cli.js"`), in which case npm names the command
 // after the package, which is never what our docs promise.
@@ -166,7 +170,17 @@ ok(`tarball contains ${declaredTargets.join(", ")}, dist/main.js and client-dist
 // 4. the real user path: global install into a scratch prefix, run from a foreign cwd.
 const prefix = path.join(tmp, "prefix");
 fs.mkdirSync(prefix, { recursive: true });
-const ins = npm(["install", "-g", "--no-audit", "--no-fund", "--prefix", prefix, spec]);
+// The canary manifest pins its internal deps to the canary version, so this install fails
+// with ETARGET while the replica still serves the dependency graph from before the publish —
+// the same lag as step 1, one layer down, and it takes the whole install with it.
+let ins = npm(["install", "-g", "--no-audit", "--no-fund", "--prefix", prefix, spec]);
+for (let n = 0; ins.status !== 0 && mayStillBeLagging(`${ins.stdout}${ins.stderr}`); n++) {
+  const step = 15_000;
+  const code = /npm error code (\w+)/.exec(`${ins.stdout}${ins.stderr}`)?.[1] ?? "lag";
+  console.log(`   global install hit registry lag (${code}#${n + 1}); retrying in ${step / 1000}s`);
+  await sleep(step);
+  ins = npm(["install", "-g", "--no-audit", "--no-fund", "--prefix", prefix, spec]);
+}
 if (ins.status !== 0) fail(`npm install -g ${spec} failed: ${(ins.stdout + ins.stderr).trim().slice(-500)}`);
 ok(`npm i -g ${spec} installed`);
 
@@ -198,11 +212,10 @@ if (all) {
   const skipped: string[] = [];
   const viewSettled = async (args: string[]) => {
     let r = npm(args);
-    for (let waited = 0; r.status !== 0 && waited < settleMs; ) {
-      const step = 10_000;
+    while (r.status !== 0 && Date.now() < lagDeadline) {
+      const step = 15_000;
       console.log(`   ${args[1]} not visible yet; retrying in ${step / 1000}s`);
       await sleep(step);
-      waited += step;
       r = npm(args);
     }
     return r;
