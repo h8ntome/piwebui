@@ -13,9 +13,14 @@ pi-web never executes tools, never talks to a model provider, and never writes s
 reaches pi through pi's own interfaces: an opt-in bridge extension for the `pi` you already have open in
 a terminal, or managed `pi` SDK child processes for sessions you start in the browser.
 
-![pi-web viewing a session: the workspace's session list on the left; on the right, pi thinks, reads and greps the code, edits the fix, runs the tests and commits it](docs/assets/screenshot-main.png)
+![pi-web's start screen: the sidebar lists the allowlisted workspaces and their sessions; the composer sits under the headline](docs/assets/screenshot-hero.png)
 
-*Viewing a session in an allowlisted workspace — synthetic demo data, real UI.*
+![pi-web viewing a session: the workspace's session list on the left; on the right, pi thinks, runs a shell command, edits a file and answers](docs/assets/screenshot-main.png)
+
+![The same session in the dark theme, with Steer and Follow-up offered while a turn is running](docs/assets/screenshot-dark.png)
+
+*Real UI, synthetic demo data: a fabricated project under `/tmp/lightlog`, written and run by a managed
+`pi` — no one's private prompts, paths or project names are in these images.*
 
 ## Install
 
@@ -23,20 +28,26 @@ a terminal, or managed `pi` SDK child processes for sessions you start in the br
 npm install -g @piwebui/pi-web
 ```
 
-Then point it at a private data directory:
+One command starts the server and opens the UI in your default browser — no subcommand, no config,
+no login:
 
 ```bash
-piweb serve --data-dir ~/.pi-web
+pi-web
 ```
 
-The terminal prints a **one-use login code** (2-minute TTL). Open <http://127.0.0.1:4319/>, paste it,
-and you are in.
+That binds `http://127.0.0.1:4319` and keeps state in `~/.pi-web`. If the port is taken, start on a
+free one (`pi-web --port 0` lets the OS pick, and the banner prints the address it actually bound).
+On a machine you reached over SSH, or anywhere there is no browser, it just prints the URL instead of
+launching a browser; `ssh -L 4319:127.0.0.1:4319 host` then gives you the UI locally. Pass `--no-open`
+to make that explicit.
+
+There is **no login page**: the browser is given a session cookie on its first request and lands
+straight on your chats.
 
 Allow the project directories whose sessions you want visible — nothing is scanned by default:
 
 ```bash
-piweb allow /absolute/path/to/your/project --data-dir ~/.pi-web
-piweb mint-code --data-dir ~/.pi-web      # another login code
+pi-web allow /absolute/path/to/your/project
 ```
 
 Working from a checkout instead:
@@ -44,8 +55,24 @@ Working from a checkout instead:
 ```bash
 npm ci
 npm run build
-./packages/server/bin/pi-web.mjs serve --data-dir ~/.pi-web
+npx pi-web                     # or: node packages/server/bin/pi-web.mjs
 ```
+
+<details>
+<summary><code>pi-web: command not found</code> after a global install</summary>
+
+Your npm global bin directory is not on `PATH`. Ask npm where it put the command and add that
+directory to your shell's `PATH`:
+
+```bash
+npm prefix -g                    # e.g. /home/you/.local/lib/node_modules/node
+export PATH="$(npm prefix -g)/bin:$PATH"
+```
+
+The launcher itself never needs a build step: `bin/pi-web.mjs` runs the compiled `dist/main.js`
+shipped in the tarball, and falls back to the TypeScript sources through `tsx` in a checkout.
+
+</details>
 
 Requirements: Node.js **≥ 22.19**, and `pi` **1.5.0** on the machine. pi-web is pinned to that pi
 version and fails closed: if the resolved pi is not the validated one, runtime-facing features are
@@ -66,13 +93,13 @@ disabled rather than guessed at.
   gone. There is no inactivity timeout that kills runs.
 - **Reach it from your phone** over a mesh VPN such as NetBird, with TLS at a reverse proxy in front of
   the loopback server.
-- **Script it** with long-lived bearer tokens: `piweb mint-token` / `piweb revoke-token`.
+- **Script it** with long-lived bearer tokens: `pi-web mint-token` / `pi-web revoke-token`.
 
 ## How it is put together
 
 | Package | Role |
 | --- | --- |
-| `@piwebui/pi-web` | the server and the `piweb` CLI |
+| `@piwebui/pi-web` | the server and the `pi-web` CLI |
 | `@piwebui/pi-adapter` | everything that touches pi: version gate, pure read worker, managed host, terminal bridge |
 | `@piwebui/shared` | types, schemas, wire frames, colour math |
 | `@piwebui/client` | the React client, built into `@piwebui/pi-web` |
@@ -84,26 +111,30 @@ against versioned schemas before they reach pi.
 ## CLI
 
 ```
-piweb serve   [--port 4319] [--bind 127.0.0.1] [--data-dir DIR] [--host-allow h1,h2]
-              [--agent-dir DIR] [--tls-cert F --tls-key F]
-piweb allow <absolute-dir>              # allowlist a workspace
-piweb workspaces                        # list allowlisted workspaces
-piweb mint-code                         # one-use browser login code
-piweb mint-token [--name n]             # long-lived API bearer token
-piweb revoke-token --id ID
-piweb logout-all                        # drop all browser sessions
-piweb install-bridge [--agent-dir DIR]  # install the bridge as a pi user extension
-piweb print-bridge-command              # exact env + `pi -e` command for a terminal session
+pi-web                          # start the server and open the browser (same as `pi-web serve`)
+pi-web serve    [--port 4319|0] [--bind 127.0.0.1] [--data-dir DIR] [--host-allow h1,h2]
+                [--agent-dir DIR] [--tls-cert F --tls-key F] [--open|--no-open]
+pi-web allow <absolute-dir>              # allowlist a workspace
+pi-web workspaces                        # list allowlisted workspaces
+pi-web mint-token [--name n]             # long-lived API bearer token
+pi-web revoke-token --id ID
+pi-web install-bridge [--agent-dir DIR]  # install the bridge as a pi user extension
+pi-web print-bridge-command              # exact env + `pi -e` command for a terminal session
+pi-web help | --version                  # usage / version
 ```
+
+`piweb` is kept as a compatibility alias for every command, so older notes and scripts keep working.
 
 ## Security
 
 - Binds `127.0.0.1` by default. A non-loopback bind requires an explicit `--bind` plus matching
   `--host-allow` entries, and the Host allowlist is built from server configuration rather than from
   request data.
-- Every `/api` route needs a session cookie or bearer token. Only the one-use bootstrap exchange and
-  static boot assets are public. Login codes expire in 2 minutes and are stored hashed, as are cookies,
-  CSRF values and API tokens.
+- There is no login and no credential to steal: every `/api` request is served an anonymous session
+  cookie (`HttpOnly`, `SameSite=Strict`, host-only) unless it already has one or presents a bearer
+  token. Cookies, CSRF values and API tokens are stored only as SHA-256 hashes, and untouched anonymous
+  sessions are pruned after 30 days. Anyone who can reach the bound address can read and drive those
+  sessions — which is why the default bind is loopback; see [SECURITY.md](SECURITY.md).
 - Mutations require the CSRF header and a trusted `Origin`. Cookies are `HttpOnly`, `SameSite=Strict`
   host-only, and `Secure` whenever the request arrives over TLS.
 - Responses carry a strict CSP, `nosniff`, `X-Frame-Options: DENY` and `referrer-policy: no-referrer`;
@@ -120,7 +151,7 @@ Keep pi-web on loopback and terminate TLS with a proxy bound to your mesh interf
 passing `Host` and `Origin` through:
 
 ```bash
-piweb serve --host-allow "100.0.0.5:8443,127.0.0.1:4319"
+pi-web serve --host-allow "100.0.0.5:8443,127.0.0.1:4319" --no-open
 ```
 
 Do not put pi-web behind public ingress.

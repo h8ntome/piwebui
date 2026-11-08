@@ -4,6 +4,13 @@ Reviewed 2026-11-07 against the committed tip. Repository had **no public git re
 review time, so nothing reviewed here was published. Findings are ordered by priority; the full text
 first appeared only in a private working branch.
 
+> **Update, same day:** the login page and the whole one-use bootstrap-code path were removed after this
+> review was written (see `CHANGELOG` → Removed and `SECURITY.md` → “Access model: no login”). Statements
+> below about `bootstrap_codes`, `mint-code` and code-based browser login describe the pre-removal code.
+> What did not change: the constant-time-comparison note in P3 still applies to cookie and CSRF lookups,
+> and the rate limiter is still best-effort — with no login at all it matters even less, and `--bind` plus
+> `--host-allow` remain the controls that protect a mis-bound instance.
+
 ## P1 — Accidental local proxy advertised a mesh-only token as a public URL (resolved)
 
 An earlier revision of the README documented a "public proxy" on port 8443 that forwarded to the

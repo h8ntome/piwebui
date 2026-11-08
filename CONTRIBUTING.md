@@ -29,14 +29,16 @@ npm run build          # typecheck all four packages + build the client
 Run the server against a throwaway data directory so you never touch your real session state:
 
 ```bash
-./packages/server/bin/pi-web.mjs serve --data-dir /tmp/pi-web-dev
+npx pi-web serve --data-dir /tmp/pi-web-dev
 ```
 
-It prints a one-use login code (2-minute TTL). Open <http://127.0.0.1:4319/>, paste it, and you are in.
-Add a workspace whose sessions you want visible — nothing is scanned implicitly:
+There is no login: the browser is handed a session cookie on its first request and opens straight on
+the session list. On a desktop the browser opens by itself; on a headless box (or with `--no-open`)
+open <http://127.0.0.1:4319/> yourself. Bare `npx pi-web` is the same thing with the default flags. Add
+a workspace whose sessions you want visible — nothing is scanned implicitly:
 
 ```bash
-./packages/server/bin/pi-web.mjs allow /absolute/path/to/a/project --data-dir /tmp/pi-web-dev
+npx pi-web allow /absolute/path/to/a/project --data-dir /tmp/pi-web-dev
 ```
 
 Day-to-day development uses two processes:

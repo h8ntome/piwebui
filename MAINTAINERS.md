@@ -55,6 +55,11 @@ A stable release is still one command:
 git tag v0.1.1 && git push origin v0.1.1
 ```
 
+Release state worth remembering: the `0.1.0` on npm predates the `pi-web` command name (it ships only
+the `piweb` alias) — `docs/research/dsh-web-launch.md`. Cutting `v0.1.1` from bumped manifests is what
+puts a plain `npm i -g @piwebui/pi-web` onto a CLI that answers to `pi-web`; until then
+`npm i -g @piwebui/pi-web@next` from `main` is the artifact that has it.
+
 Canary versions are stamped inside the job by `scripts/set-canary-version.mts` and never committed,
 so main's manifests keep the last released version and a canary can never collide with a future
 stable. The script also pins the internal `@piwebui/*` ranges to the canary version, so a canary

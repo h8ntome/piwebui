@@ -42,16 +42,26 @@ and can be read directly rather than taken on faith.
 - Non-loopback binds require an explicit `--bind` plus matching `--host-allow` entries; remote access
   is documented as a TLS-terminating reverse proxy on a trusted mesh (NetBird), never public ingress.
 
-**Authentication and sessions**
+**Access model: no login, by design**
 
-- Every `/api` route requires a session cookie or a bearer API token. Only the one-use bootstrap
-  exchange and static boot assets are public.
-- Browser login uses a **one-use bootstrap code** with a 2-minute TTL (`BOOTSTRAP_CODE_TTL_MS`);
-  codes are stored as SHA-256 hashes, never plaintext (`bootstrap_codes.hash`).
+pi-web has no login page and no credentials of its own. The first `/api` request from a browser is
+quietly given an anonymous session cookie, so opening the UI lands straight on the chats. What
+protects that listener is not a password but the network and browser fences below: loopback bind by
+default, a configuration-derived Host allowlist, an Origin allowlist on mutations, a double-submit
+CSRF token, and no CORS for credentialed reads. Treat the bound address as the trust boundary: anyone
+who can open a TCP connection to it can read and drive the sessions in your allowlisted workspaces.
+
+**Sessions**
+
+- Every `/api` route is served under a session: an anonymously issued browser cookie, or an
+  `Authorization: Bearer` API token. Static boot assets need nothing.
 - Session cookie `piweb_session` is `HttpOnly`, `SameSite=Strict`, host-only (no `Domain`), and `Secure`
-  whenever the request arrives over TLS (`x-forwarded-proto` is honoured for the flag only).
+  whenever the request arrives over TLS (`x-forwarded-proto` is honoured for the flag only). Cookies and
+  their CSRF values are stored as SHA-256 hashes, never plaintext (`web_sessions.id`, `web_sessions.csrf_hash`).
+- Anonymous sessions are pruned once untouched for 30 days (`WEB_SESSION_TTL_MS`), so cookie-less probes
+  (scanners, health checks) cannot pile up rows without bound.
 - Long-lived scripting tokens (`mint-token` / `revoke-token`) are stored hashed (`principals.token_hash`).
-- A per-principal token bucket (600 requests/minute, non-SSE traffic) limits brute-force and runaway clients.
+- A per-principal token bucket (600 requests/minute, non-SSE traffic) limits runaway clients.
 
 **Request integrity**
 
@@ -78,6 +88,10 @@ and can be read directly rather than taken on faith.
 - **pi-web can do whatever pi can do in an allowed workspace.** A control grant is equivalent to typing
   in that project's terminal. There is no separate sandbox around model or tool execution — pi owns that,
   and pi-web deliberately does not re-implement it.
+- **Reaching the port is the same as being signed in.** There is no login to forget or to phish, and no
+  password to brute-force; but a local process on that machine, or any peer that can route to a
+  non-loopback bind, gets a session and can drive those workspaces. Bind loopback unless you have put
+  a real access control (mesh ACL, proxy auth) in front of it.
 - Anything written to a session file can be rendered back into the browser. Treat session content from
   other people, cloned repositories, or model output as hostile input. It is sanitized on the way out
   and scoped to the origin, but it is still untrusted data.
@@ -90,11 +104,12 @@ and can be read directly rather than taken on faith.
 ## If you deploy this for a team
 
 - Terminate TLS in front of pi-web with a real certificate and keep the origin on one hostname.
-- The current auth model proves *that a browser holds a valid session*, not *which human* holds it:
-  the shared-password + mesh design means anyone who can log in can control sessions in every
-  allowlisted workspace. If you need per-user accountability, add authentication at the proxy
-  (for example Tailscale/NetBird ACLs plus an OIDC gate) and keep `--host-allow` narrow. Team
-  multi-user auth is planned but not implemented; do not present pi-web as a shared server otherwise.
+- The auth model proves *that a browser holds a valid session*, not *which human* holds it — and since
+  there is no login at all, a session costs an attacker nothing to obtain. Anyone who can reach the
+  listener can control sessions in every allowlisted workspace. Put per-user accountability at the
+  proxy (Tailscale/NetBird ACLs plus an OIDC gate), keep `--host-allow` narrow, and give each person
+  their own host. Team multi-user auth is planned but not implemented; do not present pi-web as a shared
+  server otherwise.
 - Keep `--host-allow` minimal and rotate API tokens (`mint-token --name`, `revoke-token --id`) when
   a machine leaves the fleet.
 - Run it as a dedicated, low-privilege user with a data dir containing only the workspaces it should see.

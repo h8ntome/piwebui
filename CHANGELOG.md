@@ -13,6 +13,25 @@ section with a dated entry.
 
 ### Added
 
+- **One-command launch.** `pi-web` with no subcommand starts the server and opens the default browser
+  straight onto the session list, mirroring how `dsh web` starts the DeepSeek harness. `--no-open` /
+  `PIWEB_NO_OPEN=1` opt out; the
+  launch degrades to the printed URL when there is no desktop session, no `xdg-open`/`open`, or the
+  server is bound to a non-loopback address. The CLI is now `pi-web` (with `piweb` kept as a
+  compatibility alias), and `pi-web help`, `--help` and `--version` were added.
+- **`pi-web` launches the same way `dsh web` does, from anywhere npm puts it.** `bin/pi-web.mjs` was
+  rewritten as an install-anchored launcher (reverse-engineered from the shipped
+  `@deepseek-ai/dsh@0.2.2-rc.1` launcher and `@deepseek-ai/dsh-web-app`; findings in
+  `docs/research/dsh-web-launch.md`): it resolves its entry from its own URL so the caller's cwd
+  never matters, checks `engines.node` before touching app code, boots the compiled `dist/main.js`
+  in-process (signals and exit codes stay owned by the server) and falls back to the TypeScript
+  sources through `tsx` in a checkout, and turns every startup failure into one `pi-web: ...` line
+  instead of a stack (`PIWEB_DEBUG=1` restores the stack). Also `--port 0` (OS-picked port, announced
+  in the banner and admitted by the Host/Origin fences), a plain-language report when the port is
+  already in use or needs privileges, a warning for plain-HTTP non-loopback binds, a skipped browser
+  handoff when launched over SSH, an error for mistyped flags, and updated `--help` covering every
+  serve flag and `PIWEB_*` variable. `npm run package:smoke` now packs, installs into a fresh global
+  prefix, and asserts the whole command surface from an unrelated directory.
 - GitHub Actions CI (`npm run typecheck`, `npm run test:unit`, `npm run build` on Node 22.19 and 24.x,
   with the client bundle uploaded as an artifact).
 - A separate advisory e2e workflow that runs the full-stack smoke against pi 1.5.0 and records the
@@ -26,9 +45,51 @@ section with a dated entry.
 - Issue templates (bug report, feature request) and a pull-request template that require real evidence.
 - `CODE_OF_CONDUCT.md` and `.editorconfig`.
 - Unit-suite goldens pinning the vendored OKHSL math against the upstream reference implementation.
+- **The README visuals now show the redesigned client.** `docs/assets/screenshot-hero.png` (the start
+  screen), `screenshot-main.png` (a live session with an expanded Edit diff and a controllable composer)
+  and `screenshot-dark.png` (the same session mid-turn in the dark theme, `Steer` and `Follow-up` offered)
+  were re-captured from the rebuilt bundle at 1600x1000 against the synthetic `/tmp/lightlog` fixture;
+  `docs/DEMO_CAPTURE.md` §0 reproduces every one of them.
+
+### Removed
+
+- **The login page is gone — not disabled, deleted.** Opening the UI drops you on your chats. The client
+  no longer ships a `Login` component, a bootstrap-code field, a `sign in`/`sign out` affordance or the
+  `#code=…` handoff; `boot()` now just contacts the server and renders. Server-side, the one-use
+  bootstrap-code machinery was removed with it: `/api/v1/auth/exchange`, `/api/v1/auth/login`,
+  `/api/v1/auth/logout`, `AuthService.mintBootstrapCode()` / `exchangeBootstrap()` / `logoutWeb()` /
+  `logoutAllWeb()`, the `bootstrap_codes` table (dropped on migrate), `BootstrapExchangeSchema`,
+  `BOOTSTRAP_CODE_TTL_MS`, and the `pi-web mint-code` and `pi-web logout-all` commands.
+- In place of a login, the request pipeline issues an anonymous browser session (`HttpOnly`,
+  `SameSite=Strict`, host-only, 30-day idle pruning) on the first `/api` call that has no cookie and no
+  bearer token. Everything that is not a login still applies: Host allowlist, `Origin` allowlist and
+  double-submit CSRF on mutations, strict CSP and friends, per-principal rate bucket, and no CORS on
+  credentialed reads. Anyone who can reach the bound address can drive the allowlisted workspaces, so
+  the default bind remains loopback — see `SECURITY.md`.
 
 ### Changed
 
+- **The web front end was rebuilt from the ground up.** The previous custom UI is gone; `packages/client`
+  is now a structured app (`styles/`, `ui/`, `features/`, `lib/`) whose layout, spacing, type, icons,
+  menus, dialogs, toasts, tooltips and light/dark palettes follow the reference harness interface that
+  `dsh web` ships — ported from the token and component CSS of the installed
+  `@deepseek-ai/dsh@0.2.2-rc.1` package (`docs/research/`), including its radii, hairline borders,
+  elevation, disclosure rows, composer card metrics and the `680…920px` chat-column formula.
+  Nothing talks to the reference backend: every control is wired to pi-web's own REST + SSE surface —
+  workspace allowlist and folder picker (`GET /api/v1/browse`), session list and search, hero
+  "pick a workspace, type, send" flow that starts a managed `pi`, streaming previews, thinking and tool
+  disclosures with diffs, model / thinking / delivery (steer, follow-up) menus, abort, compact, rename,
+  image attachments, extension dialogs, the trajectory tree, workspace file browser, context and usage
+  meters, the session-log download, settings (theme, font sizes, panel width, grouping, timestamps,
+  Enter-to-send) and the collapsed rail with responsive narrow-window behaviour. Keyboard:
+  <kbd>Ctrl</kbd>+<kbd>K</kbd> composer, <kbd>B</kbd> sidebar, <kbd>N</kbd> new session, <kbd>.</kbd>
+  abort, <kbd>R</kbd> rename, <kbd>,</kbd> settings, <kbd>Alt</kbd>+<kbd>↑/↓</kbd> switch session.
+- `GET /api/v1/browse?path=…` was added server-side for that folder picker: it lists only directory
+  entries (`name`, `kind`) inside the allowlist rules, never file contents.
+
+- Server construction passes `new LogController({ disableRequestLogging: true })` instead of the
+  deprecated top-level `disableRequestLogging` flag, so booting pi-web no longer prints a
+  `FSTDEP023` deprecation line ahead of the launch banner. Per-request access logging stays off.
 - The README now leads with the main UI instead of the login card: `docs/assets/screenshot-main.png`
   shows a session transcript (session list, thinking, tool calls with results, markdown, the follow-up
   commit) captured from a real local build at 1600x1000 @2x against synthetic demo data. No login-page
@@ -37,6 +98,53 @@ section with a dated entry.
 
 ### Fixed
 
+- **The hero folder selector was floating in the wrong place.** `--dsh-composer-hero-padding` was
+  referenced in `.pw-hero__stack` / `.pw-hero__body` but never defined, which made the whole `calc()`
+  invalid and dropped its `max-width`: the workspace chip stayed pinned to the far left of the column
+  while the composer card stayed centred (a 190 px gap at 1600 px, 350 px at 2000 px). The hero width is
+  now one derived token (`--dsh-hero-stack-width`) built from the defined side clearance, and the chip
+  sits 4 px inside the card edge at every viewport width, as in the reference.
+- **Resizing the window to a phone width blanked the app.** `collapsed = !phone && (... || useNarrow())`
+  short-circuited a hook call, so the hook count changed the moment `phone` flipped and React threw
+  `Cannot read properties of undefined (reading 'next')` while unmounting the tree. Hooks are now called
+  unconditionally.
+- **Nothing fitted a small window.** The chat column floor is now `min(680px, 100%)`, the composer card,
+  the hero stack and the transcript clamp to their container, dialogs cap at
+  `min(760px, 100%)` and `100dvh - 48px` with their body scrolling internally, and the settings pane
+  stacks its tab rail above the controls below 640 px. Measured 360/390/430/640/820/1024/1280/1470/
+  1920/2560 px in hero, session and settings states: no horizontal overflow, no element outside the
+  viewport, hero gap 4 in every case.
+- Under 640 px the sidebar is now a drawer (scrim, close button, closes on session pick) instead of a
+  56 px rail eating a third of the screen, and the right panel opens as a side sheet so the Workspace
+  files / Trajectory / Context tabs stay reachable on a phone. <kbd>Ctrl</kbd>+<kbd>B</kbd> toggles the
+  drawer there and the rail elsewhere.
+
+- **Commands could be silently dropped once a control grant expired.** A grant lives for a minute, but
+  the client kept using the cached secret, so anything typed after that failed envelope validation
+  (`controlSecret: must not have fewer than 8 characters`). The client now renews the grant before it
+  lapses, renews defensively before every dispatch, and treats a rejected secret the same way as
+  `stale_control`: re-acquire and retry once.
+- **`ownerChanged` wiped the session's status.** That event is routine while a managed `pi` boots, and
+  clearing `status` left the composer without capabilities, so the first prompt of a new session was
+  never sent. The event now just triggers a re-read of `GET /api/v1/sessions/:key` (same for `resync`
+  and `hostExited`).
+- **A failed command reported nothing.** `POST …/commands` only acknowledges the envelope; the owner's
+  answer arrives on the operation receipt. The client now polls `GET /api/v1/operations/:id` and shows
+  `failed` / `unknown` / `cancelled` results as an error toast and a composer notice (for example
+  "session is streaming; use steer or follow-up"), and marks successful ones on the operation state.
+- **The prompt you had just typed appeared twice** — once as the live user preview and once as the
+  committed entry — because user previews never carry `mappedEntryId`. Previews are now deduplicated
+  against committed messages by role and text.
+- **The server could take itself down when a settled managed host was reaped.**
+  `scheduleSettledCleanup()` dereferenced `state.queue` unconditionally and threw inside a timer, which
+  is an unhandled exception; the cleanup body is now guarded and a failure is logged instead of fatal.
+- The collapsed sidebar kept the session-list controls (search, sort, add) overflowing its 56px rail and
+  left the account row floating mid-rail; the rail now shows the mark (which expands the sidebar), new
+  session, the panel icons and the account row at the bottom, matching the reference.
+
+- `e2e/server-smoke.mts` assumed pi always writes message content as a block array and threw
+  (`content.filter is not a function`) as soon as the flow reached the transcript checks; it now reads
+  text from a string or a block array, which is what unblocked `S13` and `S18`.
 - **Theme colors rendered as clipped primaries.** `chromaStops()` in the vendored OKHSL code was
   missing the outer reciprocal on both harmonic means relative to `pi-tui`'s reference implementation,
   which inflated `c0`/`cMid` and pushed every saturated color out of gamut. `okhsl(40 10% 90%)`
@@ -55,5 +163,5 @@ Honest, as of this commit, on Node 24 with pi 1.5.0 installed:
 | `npm run typecheck` | pass |
 | `npm run test:unit` | pass (9 tests) |
 | `npm run build` | pass (client bundle, no source maps) |
-| `npm run smoke` | **18/22** — `S13`, `S17`, `S18`, `S20` fail on the committed tip and are open work |
+| `npm run smoke` | **21/23** on 2026-11-07 after the login removal (`S1`–`S4b` now assert the login-free contract). `S17` and `S20` still fail and are open work: `S17` lost one of four concurrent hosts to a control-acquire timeout, `S20` asserts an `entries` field the stats route has never returned (it answers `totalEntries`). |
 | `npm run p0:verify` | not re-run in this pass; see `docs/CAPABILITY_MATRIX.md` for its last recorded result |

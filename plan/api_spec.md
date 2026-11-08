@@ -10,6 +10,13 @@ Bearer auth for API clients; same-origin HttpOnly cookie for browser/EventSource
 A one-use short-lived bootstrap code is exchanged on a dedicated auth endpoint, followed
 by URL cleanup; never put reusable bearer tokens in stream URLs. All reads, metadata,
 health and SSE require auth; only static boot assets and bootstrap exchange are exceptions.
+
+> **Superseded 2026-11-07 — there is no login any more.** The bootstrap code, its exchange endpoint and
+> the login page were removed: the request pipeline issues an anonymous HttpOnly session cookie on the
+> first `/api` call, so the UI opens straight onto the chats. Everything else in this paragraph still
+> holds (Host/origin allowlists checked against server config, Origin+CSRF on cookie mutations, no
+> cross-origin credentialed CORS). See `SECURITY.md` for the current trust model.
+
 Validate configured Host/origin allowlists independently of request-supplied Host. Cookie
 mutations of **every** HTTP method require matching Origin plus CSRF header/token.
 No cross-origin credentialed CORS. Strict JSON, 8 MiB encoded request ceiling.

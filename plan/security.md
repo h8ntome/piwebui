@@ -15,6 +15,9 @@ Tool rows are observations; actual extension dialogs retain their real semantics
   query leakage. Dedicated short-lived exchange issues HttpOnly SameSite=Strict cookie
   where usable, Secure on HTTPS, narrow path and no Domain. Referrer-Policy:no-referrer.
   Static boot assets contain no session data; API/SSE/meta/health all require auth.
+  *(Superseded 2026-11-07: the login page and the bootstrap code were deleted. The pipeline now issues an
+  anonymous HttpOnly SameSite=Strict session cookie on the first API call, and the bound address is the
+  trust boundary. The cookie/CSRF/Origin rules below are unchanged.)*
 - Cookie-authenticated POST/PATCH/PUT/DELETE require explicit CSRF token/header and matching
   trusted Origin. Bearer automation clients need a validated host and reject foreign Origin
   when present. Never weaken auth for SSH forwarding or loopback.
