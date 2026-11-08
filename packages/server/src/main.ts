@@ -692,7 +692,12 @@ export async function runCli(argv: string[] = process.argv.slice(2)): Promise<vo
       token: next,
       http: live?.http ?? `http://${cfg.bind}:${cfg.port}`,
       piwebVersion: live?.piwebVersion ?? packageVersion(),
-      ...(live ? { startedAt: live.startedAt, pid: live.pid, procStart: live.procStart } : {}),
+      // 0 means "no running server is described here", which is the truth when the CLI rotated the
+      // token on a cold data dir: it must not claim its own short-lived pid (the descriptor would
+      // then age out instantly and `doctor` would chase a process that never was the server).
+      pid: live?.pid ?? 0,
+      procStart: live?.procStart ?? 0,
+      ...(live ? { startedAt: live.startedAt } : {}),
     });
     console.log("New bridge token written to " + descriptorPath(cfg.dataDir) + " (never printed).");
     console.log("A running pi-web still holds the old token in memory: restart it, or POST /api/v1/bridge/rotate-token.");

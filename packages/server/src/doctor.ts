@@ -82,8 +82,12 @@ export async function collectDoctor(dataDir: string): Promise<DoctorReport> {
     }
     checks.push(fs.existsSync(d.socket) ? ok("socket", `bridge socket present: ${d.socket}`)
       : fail("socket", `descriptor points at ${d.socket}, which does not exist: pi-web is not running (or died without cleaning up)`, "start pi-web; bridges reconnect within 15 s"));
-    checks.push(pidAlive(d.pid) ? ok("server.pid", `pid ${d.pid} from the descriptor is alive (server ${d.serverId})`)
-      : fail("server.pid", `descriptor claims server pid ${d.pid}, which is not running: it is stale`, "start pi-web (it rewrites the descriptor on boot)"));
+    checks.push(d.pid === 0
+      // A token rotated by the CLI on a cold data dir describes no running server; saying "stale"
+      // would send the reader chasing a process that never existed.
+      ? warn("server.pid", "the descriptor was written without a running server (a CLI token rotation), so it names no pid", "start pi-web: it rewrites the descriptor with its real pid on boot")
+      : pidAlive(d.pid) ? ok("server.pid", `pid ${d.pid} from the descriptor is alive (server ${d.serverId})`)
+        : fail("server.pid", `descriptor claims server pid ${d.pid}, which is not running: it is stale`, "start pi-web (it rewrites the descriptor on boot)"));
     const age = (() => { try { return Date.now() - fs.statSync(file).mtimeMs; } catch { return null; } })();
     checks.push(age !== null && age < 7 * 24 * 3600_000 ? ok("descriptor.age", `descriptor is ${Math.round(age / 1000)} s old`)
       : warn("descriptor.age", age === null ? "descriptor age unknown" : `descriptor is ${Math.round(age / 60000)} min old`));
