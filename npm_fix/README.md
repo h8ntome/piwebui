@@ -58,9 +58,16 @@ nothing to the registry until a **tag push** cuts the release (`release.yml` pub
 `latest`; every `main` push publishes a canary to `next` only). At the time of writing, the only tag
 in the repo was `v0.1.0`. So the repaired manifest existed only inside canaries nobody installs.
 
+That is also why "the **old UI** still works": `0.1.0` shipped the pre-rebuild client. Its
+`client-dist/assets/*.js` still contains the login surface (`Sign in`, `login`, the `mint-code`
+flow), while the `0.1.1` bundle contains none of it and does contain `Terminal (bridged)`. Anyone on
+`latest` was looking at the interface from 2026-11-07 — which is the experience in the report, and
+why "the install is green, the app opens, and the new thing is simply not there" was never one bug
+but a whole stale artifact.
+
 ## 2. Root cause B — `latest` was not one release: same version numbers, 18 hours apart
 
-This is the half that explains "**the new** stuff doesn't work" rather than just "one name is
+This is the half that explains that explains "**the new** stuff doesn't work" rather than just "one name is
 missing". The four publishable packages share one version number by design, but their `latest` tags
 had been moved independently:
 
