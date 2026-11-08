@@ -25,6 +25,14 @@ const results: { name: string; status: Status; detail: string }[] = [];
 const rec = (name: string, status: Status, detail = "") => results.push({ name, status, detail: String(detail).slice(0, 170) });
 const check = (name: string, ok: unknown, detail = "") => rec(name, ok ? "PASS" : "FAIL", detail);
 
+/** pi writes message content as a block array and as a bare string, depending on the record;
+ *  read text out of either shape instead of assuming one. */
+const textOf = (content: unknown): string => {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) return content.filter((c) => (c as { type?: string })?.type === "text").map((c) => String((c as { text?: string }).text ?? "")).join("");
+  return "";
+};
+
 const EXTERNAL_PORT = process.env.PIWEB_SMOKE_PORT ? Number(process.env.PIWEB_SMOKE_PORT) : null;
 const EXTERNAL_DATA = process.env.PIWEB_SMOKE_DATA || null;
 const PORT = EXTERNAL_PORT ?? 4096 + Math.floor(Math.random() * 4096);
@@ -74,35 +82,32 @@ if (server) {
   server.stderr.on("data", (d) => { serverOut += d; fs.writeSync(log, d); });
 }
 
-/* --- S1/S2: transport and auth gate --- */
+/* --- S1/S2: transport, and a session served without any login --- */
 let up = false;
 for (let i = 0; i < 1800; i++) {
   await new Promise((r) => setTimeout(r, 500));
-  try { const r = await fetch(`${BASE}/api/v1/health`); if (r.status === 401 || r.ok) { up = true; break; } } catch { /* not yet */ }
+  try { const r = await fetch(`${BASE}/api/v1/health`); if (r.ok) { up = true; break; } } catch { /* not yet */ }
 }
-check("S1 server responds (health requires auth by design)", up, serverOut.slice(0, 120));
+check("S1 server responds with no login step", up, serverOut.slice(0, 120));
 if (!up) { console.log("server output:\n", serverOut); finish(); }
 
-const unauth = await fetch(`${BASE}/api/v1/sessions`);
-check("S2 api requires auth", unauth.status === 401);
-
-/* --- S3/S4: one-use bootstrap code -> cookie + csrf --- */
-const mint = crypto.randomBytes(12).toString("base64url");
-{
-  const db = new DatabaseSync(path.join(dataDir, "metadata.db"));
-  db.exec("CREATE TABLE IF NOT EXISTS bootstrap_codes(hash TEXT PRIMARY KEY, expires_at INTEGER, used INTEGER DEFAULT 0)");
-  db.prepare("INSERT INTO bootstrap_codes(hash, expires_at) VALUES(?, ?)").run(crypto.createHash("sha256").update(mint).digest("hex"), Date.now() + 120_000);
-  db.close();
-}
-check("S3 mint bootstrap code", /^[A-Za-z0-9._-]{8,}$/.test(mint), mint.slice(0, 8));
-
-const ex = await fetch(`${BASE}/api/v1/auth/exchange`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ code: mint }) });
-const exBody = await ex.json() as { csrf?: string };
-const cookie = (ex.headers.getSetCookie?.()[0] ?? "").split(";")[0] ?? "";
-const csrf = exBody.csrf ?? "";
-check("S4 exchange -> cookie+csrf", ex.ok && cookie.startsWith("piweb_session=") && !!csrf);
-const usedAgain = await fetch(`${BASE}/api/v1/auth/exchange`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ code: mint }) });
-check("S4b code is single-use", usedAgain.status === 401);
+/* --- S2..S4: anonymous session cookie, csrf, and the checks that remain in force --- */
+const anon = await fetch(`${BASE}/api/v1/sessions`);
+const cookie = (anon.headers.getSetCookie?.()[0] ?? "").split(";")[0] ?? "";
+const anonBody = await anon.json() as { sessions?: unknown };
+check("S2 cookie-less call is served an anonymous session", anon.ok && cookie.startsWith("piweb_session="), `${anon.status} ${cookie.slice(0, 28)}`);
+check("S2b chats list without a login", Array.isArray(anonBody.sessions), JSON.stringify(anonBody).slice(0, 80));
+const csrfRes = await fetch(`${BASE}/api/v1/auth/csrf`, { headers: { cookie } });
+const csrf = ((await csrfRes.json()) as { csrf?: string }).csrf ?? "";
+check("S3 session csrf token issued", !!csrf);
+const noCsrf = await fetch(`${BASE}/api/v1/sessions`, {
+  method: "POST", headers: { cookie, "content-type": "application/json", origin: BASE }, body: JSON.stringify({ workspaceKey: "w_missing" }),
+});
+check("S4 mutation without csrf still refused", noCsrf.status === 403, String(noCsrf.status));
+const badOrigin = await fetch(`${BASE}/api/v1/sessions`, {
+  method: "POST", headers: { cookie, "x-piweb-csrf": csrf, "content-type": "application/json", origin: "http://not-allowed.example" }, body: JSON.stringify({ workspaceKey: "w_missing" }),
+});
+check("S4b mutation from a foreign origin still refused", badOrigin.status === 403, String(badOrigin.status));
 
 const H = { cookie, "x-piweb-csrf": csrf, "content-type": "application/json", origin: BASE };
 const waitRuntime = async (k: string, ms = 600_000) => {
@@ -200,8 +205,8 @@ if (ready) {
 }
 
 if (ready) {
-  const ea = await (await fetch(`${BASE}/api/v1/sessions/${key}/entries?limit=500`, { headers: H })).json() as { entries?: { type: string; raw: { message?: { content?: { type: string; text?: string }[] } } }[] };
-  const assistantText = (ea.entries ?? []).filter((e) => e.type === "message").map((e) => (e.raw.message?.content ?? []).filter((c) => c.type === "text").map((c) => c.text).join("")).join("|");
+  const ea = await (await fetch(`${BASE}/api/v1/sessions/${key}/entries?limit=500`, { headers: H })).json() as { entries?: { type: string; raw: { message?: { content?: unknown } } }[] };
+  const assistantText = (ea.entries ?? []).filter((e) => e.type === "message").map((e) => textOf(e.raw.message?.content)).join("|");
   check("S13 prompt+reply persisted by pi itself", assistantText.includes("Mock reply to: hello from smoke"), assistantText.slice(0, 80));
 } else rec("S13 prompt+reply persisted by pi itself", "SKIP", "host not ready");
 
@@ -241,7 +246,7 @@ if (ready && keys.length === concTarget) {
     await new Promise((r) => setTimeout(r, 20_000));
     const replies = await Promise.all(keys.map(async (k) => {
       const e = await (await fetch(`${BASE}/api/v1/sessions/${k}/entries?limit=500`, { headers: H })).json() as { entries?: { type: string; raw: { message?: { content?: { type: string; text?: string }[] } } }[] };
-      return (e.entries ?? []).some((x) => (x.raw.message?.content ?? []).some((c) => (c.text ?? "").includes("Mock reply")));
+      return (e.entries ?? []).some((x) => textOf(x.raw.message?.content).includes("Mock reply"));
     }));
     check("S18 all four sessions replied independently", replies.every(Boolean), replies.join(","));
 

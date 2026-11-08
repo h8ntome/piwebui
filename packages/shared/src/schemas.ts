@@ -95,10 +95,6 @@ export const ControlActionSchema = Type.Object({
   controllerId: Type.String({ minLength: 8, maxLength: 64 }),
 });
 
-export const BootstrapExchangeSchema = Type.Object({
-  code: Type.String({ minLength: 8, maxLength: 256 }),
-});
-
 export const ListSessionsQuerySchema = Type.Object({
   workspaceKey: Type.Optional(Type.String({ maxLength: 64 })),
   q: Type.Optional(Type.String({ maxLength: 200 })),

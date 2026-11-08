@@ -1,7 +1,16 @@
 /**
- * pi-web server entry. Default bind 127.0.0.1:4319 with mandatory auth.
- * Commands: serve (default) | mint-code | mint-token <name> | revoke-token <id> |
- * install-bridge [--agent-dir <dir>] | print-bridge-command
+ * pi-web server entry. Default bind 127.0.0.1:4319. Opening the UI lands straight on the
+ * chats - there is no login page and no code to paste.
+ *
+ * Bare `pi-web` (no subcommand) starts the server and opens the browser, the way
+ * `dsh web` works in the DeepSeek harness (launcher flags first, the app's own
+ * flags after; `--port 0` lets the OS pick a free port). Explicit commands:
+ * serve (default) | allow <dir> | workspaces | mint-token [--name n] |
+ * revoke-token --id <id> | install-bridge [--agent-dir <dir>] |
+ * print-bridge-command | help
+ *
+ * `bin/pi-web.mjs` imports `runCli` from the compiled build; `node dist/main.js`
+ * and `tsx src/main.ts` still self-execute through the guard at the bottom.
  */
 import fs from "node:fs";
 import http from "node:http";
@@ -10,6 +19,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import os from "node:os";
 import crypto from "node:crypto";
+import { spawn } from "node:child_process";
 import { resolvePiPackage } from "@piwebui/pi-adapter";
 import { loadConfig, AuthService, saveConfigDir, type Config } from "./auth.ts";
 import { Store } from "./store.ts";
@@ -38,6 +48,125 @@ function parseFlags(argv: string[]): Record<string, string | boolean> {
     }
   }
   return out;
+}
+
+const HELP = `pi-web — local web UI for pi sessions (no login: open the URL and you are in)
+
+  pi-web                        start the server and open the browser (loopback)
+  pi-web serve [--port 4319] [--bind 127.0.0.1] [--data-dir DIR] [--host-allow h1,h2]
+                [--agent-dir DIR] [--tls-cert F --tls-key F] [--open|--no-open]
+  pi-web allow <absolute-dir>   allowlist a workspace whose sessions pi-web may read
+  pi-web workspaces             list allowlisted workspaces
+  pi-web mint-token [--name n]  print a long-lived API bearer token
+  pi-web revoke-token --id ID   revoke an API token
+  pi-web install-bridge         install the terminal-bridge pi extension
+  pi-web print-bridge-command   exact env + \`pi -e\` command for a terminal session
+
+Serve flags (bare \`pi-web\` and \`pi-web serve\` take the same flags):
+  --port <n>        listen port; pass 0 to let the OS pick a free one (default 4319)
+  --bind <addr>     one concrete IPv4/IPv6 literal of a local interface (default 127.0.0.1)
+  --data-dir <dir>  state directory (default ~/.pi-web, or $PIWEB_DATA_DIR)
+  --host-allow <h>  extra Host authorities for a reverse proxy (repeatable list, comma-separated)
+  --agent-dir <dir> pi agent dir to read settings/themes from
+  --tls-cert/--tls-key  serve HTTPS with an existing PEM pair (must be given together)
+  --no-open         print the URL instead of opening the default browser
+                    (also PIWEB_NO_OPEN=1; forced off over SSH or on non-loopback binds)
+
+Environment: PIWEB_PORT PIWEB_BIND PIWEB_DATA_DIR PIWEB_HOSTS_ALLOW PIWEB_ORIGINS_ALLOW
+             PIWEB_AGENT_DIR PIWEB_TLS_CERT PIWEB_TLS_KEY PIWEB_MAX_MANAGED PIWEB_NO_OPEN
+
+  pi-web --version | --help
+
+  Install once, launch anywhere:  npm i -g @piwebui/pi-web && pi-web
+`;
+
+/** Flags the CLI understands; anything else is a typo worth reporting. */
+const KNOWN_FLAGS = new Set([
+  "port", "bind", "data-dir", "host-allow", "origins-allow", "agent-dir", "tls-cert", "tls-key",
+  "open", "no-open", "name", "id", "help", "h", "version", "v", "V",
+]);
+
+/** Flag names in argv that this CLI does not know (\"--pot 5000\" would otherwise be ignored). */
+function unknownFlags(argv: string[]): string[] {
+  return argv.filter((a) => a.startsWith("--") && !KNOWN_FLAGS.has(a.slice(2)));
+}
+
+/** Version of the installed @piwebui/pi-web package (works packed and in a checkout). */
+export function packageVersion(): string {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(HERE, "..", "package.json"), "utf8")) as { version?: string };
+    return pkg.version ?? "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+}
+
+function printVersion(): void {
+  console.log(`pi-web ${packageVersion()}`);
+}
+
+/* ---------------- browser handoff (bare `pi-web` launch) ---------------- */
+
+const BROWSER_OPENERS: Record<string, string> = {
+  darwin: "open", linux: "xdg-open", freebsd: "xdg-open", netbsd: "xdg-open", openbsd: "xdg-open", android: "termux-open",
+};
+
+function findInPath(prog: string): string | null {
+  const exts = process.platform === "win32" ? (process.env.PATHEXT ?? ".EXE;.CMD").split(";") : [""];
+  for (const dir of (process.env.PATH ?? "").split(path.delimiter)) {
+    if (!dir) continue;
+    for (const ext of exts) {
+      const cand = path.join(dir, prog + ext);
+      try { fs.accessSync(cand, fs.constants.X_OK); return cand; } catch { /* keep looking */ }
+    }
+  }
+  return null;
+}
+
+function isLoopbackBind(bind: string): boolean {
+  return bind === "127.0.0.1" || bind === "localhost" || bind === "::1";
+}
+
+/** Like dsh web: SSH_CONNECTION / SSH_TTY mean "this terminal is remote", so a
+ *  local browser handoff would open nothing (or the wrong machine's browser). */
+function launchedOverSsh(): boolean {
+  return Boolean(process.env.SSH_CONNECTION || process.env.SSH_TTY);
+}
+
+/** Why we cannot (or will not) launch a browser here; null means "go ahead". */
+function browserOpenBlocker(flags: Record<string, string | boolean>, bind: string): string | null {
+  if (flags["no-open"]) return "--no-open";
+  if (process.env.PIWEB_NO_OPEN) return "PIWEB_NO_OPEN is set";
+  if (launchedOverSsh()) return "launched over SSH; open the printed URL on your own machine (ssh -L works)";
+  if (!isLoopbackBind(bind)) return `bound to ${bind}, not loopback`;
+  const opener = BROWSER_OPENERS[process.platform];
+  if (!opener) return `no browser opener for ${process.platform}`;
+  // `--open` says "try anyway": keep the platform opener but skip session probes.
+  if (flags.open === true) return null;
+  if (process.platform !== "darwin" && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY && !process.env.TERMUX_VERSION) {
+    return "no desktop session here (pass --open to try anyway)";
+  }
+  if (!findInPath(opener)) return `${opener} not installed`;
+  return null;
+}
+
+/** One-line fatal startup report (dsh prints `dsh web: ...`; we print `pi-web: ...`). */
+function fatal(message: string): never {
+  process.stderr.write(`pi-web: ${message}\n`);
+  process.exit(1);
+}
+
+function openBrowser(url: string): boolean {
+  const opener = BROWSER_OPENERS[process.platform];
+  if (!opener) return false;
+  try {
+    const child = spawn(opener, [url], { stdio: "ignore", detached: true });
+    child.on("error", () => { /* fall back to the printed URL */ });
+    child.unref();
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function clientDist(): string | null {
@@ -189,7 +318,7 @@ export async function serve(flags: Record<string, string | boolean>) {
     piPkg: { version: piPkg?.version ?? null, path: piPkg?.entry ?? null },
     serverId: auth.serverId(),
     startedAt: Date.now(),
-    manifest: { version: "0.1.0" },
+    manifest: { version: packageVersion() },
   };
   registerRoutes(app, ctx);
   const dist = clientDist();
@@ -198,21 +327,53 @@ export async function serve(flags: Record<string, string | boolean>) {
     app.get("/", async (_req, reply) => { reply.code(503).type("text/plain"); return "pi-web client not built yet (npm run build -w @piwebui/client)"; });
   }
 
-  await app.listen({ host: cfg.bind, port: cfg.port });
+  try {
+    await app.listen({ host: cfg.bind, port: cfg.port });
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException)?.code;
+    const detail = error instanceof Error ? error.message : String(error);
+    if (code === "EADDRINUSE") {
+      fatal(`port ${cfg.port} on ${cfg.bind} is already in use - another pi-web (or something else) holds it. Start on a free port with \`pi-web --port 0\` (the OS picks one) or \`pi-web --port 4400\`.`);
+    }
+    if (code === "EACCES") {
+      fatal(`${cfg.bind}:${cfg.port} needs privileges (ports below 1024). Run \`pi-web --port 4319\` on an unprivileged port.`);
+    }
+    fatal(`could not listen on ${cfg.bind}:${cfg.port}: ${detail}`);
+  }
+
+  // The listener knows the truth: with --port 0 the OS assigned the port, and the
+  // Host/Origin fences were composed from the requested value, so admit the real
+  // authority before any browser request can arrive.
+  const scheme = cfg.tls ? "https" : "http";
+  const address = app.server.address();
+  const boundPort = typeof address === "object" && address ? address.port : cfg.port;
+  if (boundPort !== cfg.port) {
+    const authorities = [`localhost:${boundPort}`, `127.0.0.1:${boundPort}`, `[::1]:${boundPort}`, `${cfg.bind}:${boundPort}`];
+    for (const h of authorities) if (!cfg.hostsAllow.includes(h)) cfg.hostsAllow.push(h);
+    for (const h of authorities) {
+      const origin = `${scheme}://${h}`;
+      if (!cfg.originsAllow.includes(origin)) cfg.originsAllow.push(origin);
+    }
+  }
   bridges.start();
   setInterval(() => ops.sweep(), 3600_000).unref?.();
 
-  // Access banner (terminal only; bootstrap codes never appear in access logs).
-  const scheme = cfg.tls ? "https" : "http";
-  const code = auth.mintBootstrapCode();
+  // Access banner (terminal only).
   const token = auth.bridgeToken();
+  const base = `${scheme}://${isLoopbackBind(cfg.bind) ? cfg.bind : "localhost"}:${boundPort}`;
+  if (!isLoopbackBind(cfg.bind) && !cfg.tls) {
+    process.stderr.write(`pi-web: listening on ${cfg.bind} over plain HTTP; anyone who can reach that address can drive pi. Prefer a loopback bind behind a proxy you own.\n`);
+  }
+  const blocker = browserOpenBlocker(flags, cfg.bind);
+  const opened = blocker ? false : openBrowser(`${base}/`);
   process.stdout.write([
     "",
-    `  pi-web listening on ${scheme}://${cfg.bind}:${cfg.port}  (server ${ctx.serverId})`,
+    `  pi-web listening on ${base}  (server ${ctx.serverId})`,
     `  Pi adapter: ${piPkg ? `${piPkg.name}@${piPkg.version}` : "NOT RESOLVED (read-only)"}`,
     "",
-    `  Login code (one use, 2 min): ${code}`,
-    `  Open ${scheme}://${cfg.bind === "0.0.0.0" ? "localhost" : cfg.bind}:${cfg.port}/ and exchange the code.`,
+    ...(opened
+      ? [`  Browser opened at ${base}/ - your sessions load straight away, no sign-in.`]
+      : [`  Open ${base}/ in a browser.   (no browser launched: ${blocker})`]),
     "",
     "  To let a TERMINAL pi be controlled from the browser, start it with the bridge:",
     `    PIWEB_BRIDGE_TOKEN=${token} \\`,
@@ -221,7 +382,7 @@ export async function serve(flags: Record<string, string | boolean>) {
     "  (Existing pi processes pick the bridge up only at an idle /reload or next start.)",
     "",
   ].join("\n") + "\n");
-  logInfo("server_start", { port: cfg.port });
+  logInfo("server_start", { port: boundPort, bind: cfg.bind, opened_browser: opened });
 
   const shutdown = async () => {
     bridges.stop();
@@ -240,6 +401,7 @@ export async function serve(flags: Record<string, string | boolean>) {
   return app;
 }
 
+/** The path printed when the browser could not be handed the URL. */
 function bridgeExtensionPathFor(_piPkg: ReturnType<typeof resolvePiPackage>): string {
   const src = path.join(HERE, "..", "..", "pi-adapter", "src", "bridge", "extension.mjs");
   const dist = path.join(HERE, "..", "..", "pi-adapter", "dist", "bridge", "extension.mjs");
@@ -247,26 +409,43 @@ function bridgeExtensionPathFor(_piPkg: ReturnType<typeof resolvePiPackage>): st
 }
 
 /* ---------------- CLI subcommands ---------------- */
-async function cli() {
-  const argv = process.argv.slice(2);
-  const cmd = argv[0] ?? "serve";
+
+/**
+ * CLI entry, called by bin/pi-web.mjs in-process (and by the self-exec guard
+ * below when the module is run directly).
+ */
+export async function runCli(argv: string[] = process.argv.slice(2)): Promise<void> {
+  const wantsHelp = argv.some((a) => a === "-h" || a === "--help");
+  const wantsVersion = argv.some((a) => a === "-v" || a === "-V" || a === "--version");
+  // Bare launch: `pi-web` (or flags-only, e.g. `pi-web --port 5000`) starts the server and
+  // opens the browser - the one-command launch, mirroring `dsh web`.
+  if (argv.length === 0 || argv[0]!.startsWith("-")) {
+    if (wantsHelp) { process.stdout.write(HELP); return; }
+    if (wantsVersion) { printVersion(); return; }
+    const bad = unknownFlags(argv);
+    if (bad.length) { process.stderr.write(`unknown flag(s): ${bad.join(", ")}\n\n${HELP}`); process.exit(2); }
+    await serve(parseFlags(argv));
+    return;
+  }
+  const cmd = argv[0]!;
+  if (cmd === "help") { process.stdout.write(HELP); return; }
   const flags = parseFlags(argv.slice(1));
-  if (cmd === "serve") { await serve(flags); return; }
+  if (cmd === "serve") {
+    const bad = unknownFlags(argv.slice(1));
+    if (bad.length) { process.stderr.write(`unknown flag(s): ${bad.join(", ")}\n\n${HELP}`); process.exit(2); }
+    await serve(flags);
+    return;
+  }
   const cfg = loadConfig({ ...(flags["data-dir"] ? { dataDir: String(flags["data-dir"]) } : {}) });
   const store = new Store(path.join(cfg.dataDir, "metadata.db"));
   const auth = new AuthService(store, cfg);
-  if (cmd === "mint-code") {
-    console.log(auth.mintBootstrapCode());
-  } else if (cmd === "mint-token") {
+  if (cmd === "mint-token") {
     const name = String(flags.name ?? "cli");
     const t = auth.mintApiToken(name);
     console.log(t.token);
     console.error(`token id: ${t.id}`);
   } else if (cmd === "revoke-token") {
     console.log(String(auth.revokeApiToken(String(flags.id ?? ""))));
-  } else if (cmd === "logout-all") {
-    auth.logoutAllWeb();
-    console.log("ok");
   } else if (cmd === "allow") {
     const p = argv[1];
     if (!p) { console.error("usage: pi-web allow <absolute-directory>"); process.exit(2); }
@@ -293,14 +472,14 @@ async function cli() {
   } else if (cmd === "print-bridge-command") {
     console.log(`PIWEB_BRIDGE_TOKEN=${auth.bridgeToken()} PIWEB_BRIDGE_DIR=${path.join(cfg.dataDir, "bridges")} pi -e ${bridgeExtensionPathFor(null)}`);
   } else {
-    console.error("usage: pi-web [serve|allow <dir>|workspaces|mint-code|mint-token|revoke-token|logout-all|install-bridge|print-bridge-command]");
+    process.stderr.write(`unknown command: ${cmd}\n\n${HELP}`);
     process.exit(2);
   }
   store.close();
 }
 
 if (process.argv[1] && (process.argv[1].endsWith("main.ts") || process.argv[1].endsWith("main.js"))) {
-  void cli();
+  void runCli();
 }
 
 void shellEscape;

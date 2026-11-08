@@ -741,16 +741,21 @@ export class Sessions {
     if (rec.kind !== "managed" || !rec.driver) return;
     if (rec.cleanupTimer) clearTimeout(rec.cleanupTimer);
     rec.cleanupTimer = setTimeout(() => {
-      const s = rec.state;
-      const quiet = s.phase === "idle" && !this.hub.getStream(rec.key).hasSubs() && s.dialogs.size === 0 && (s.queue.count ?? 0) === 0 && s.previews.size === 0;
-      if (quiet && rec.driver) {
-        logInfo("settled_host_cleanup", { key: rec.key.slice(0, 10) });
-        const d = rec.driver;
-        (d as unknown as { markIntentionalExit?: () => void }).markIntentionalExit?.();
-        d.dispose("settled cleanup");
-      }
+      try { this.runSettledCleanup(rec); } catch (err) { logWarn("settled_host_cleanup_failed", { key: rec.key.slice(0, 10), error: String(err) }); }
     }, SETTLED_HOST_CLEANUP_MS);
     rec.cleanupTimer.unref?.();
+  }
+
+  private runSettledCleanup(rec: SessionRec) {
+    const s = rec.state;
+    const quiet = s.phase === "idle" && !this.hub.getStream(rec.key).hasSubs()
+      && s.dialogs.size === 0 && ((s.queue?.count ?? 0) === 0) && s.previews.size === 0;
+    if (quiet && rec.driver) {
+      logInfo("settled_host_cleanup", { key: rec.key.slice(0, 10) });
+      const d = rec.driver;
+      (d as unknown as { markIntentionalExit?: () => void }).markIntentionalExit?.();
+      d.dispose("settled cleanup");
+    }
   }
 
   hasCapacity(): boolean {

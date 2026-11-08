@@ -1,9 +1,15 @@
 /**
- * Fastify wiring: Host allowlist, cookie/bearer auth, CSRF, CSP, byte caps.
- * Every /api route requires authentication (only static boot assets and the bootstrap
- * exchange are public). No CORS for credentialed requests.
+ * Fastify wiring: Host allowlist, browser identity, CSRF, CSP, byte caps.
+ *
+ * There is no login. The first API request from a browser is quietly given an anonymous
+ * session cookie, so opening the UI lands straight on the chats. What still applies to
+ * every request: the Host allowlist (anti DNS-rebinding), the mutation Origin allowlist,
+ * the double-submit CSRF token bound to the session, the CSP/referrer/frame headers and
+ * the per-principal rate bucket. Script clients may still use `Authorization: Bearer`.
+ * No CORS is granted for credentialed requests, so a foreign page can neither read the
+ * responses nor learn its own session's CSRF token.
  */
-import Fastify, { type FastifyInstance } from "fastify";
+import Fastify, { LogController, type FastifyInstance } from "fastify";
 import fs from "node:fs";
 import path from "node:path";
 import { ERROR_HTTP_STATUS, MAX_REQUEST_BYTES, type ErrorCode } from "@piwebui/shared";
@@ -16,11 +22,20 @@ export interface ReqCtx {
   csrfHeader: string;
 }
 
+/** Anonymous browser sessions live 30 days; the browser never has to sign in. */
+const SESSION_MAX_AGE_S = 30 * 24 * 3600;
+
+function sessionCookie(value: string, secure: boolean): string {
+  return `${COOKIE_NAME}=${value}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_MAX_AGE_S}${secure ? "; Secure" : ""}`;
+}
+
 export function buildServer(cfg: Config, auth: AuthService): FastifyInstance {
   const app = Fastify({
     bodyLimit: MAX_REQUEST_BYTES,
     trustProxy: false,
-    disableRequestLogging: true,
+    // Per-request access logs stay off (the launcher banner is the only startup noise).
+    // fastify@5 wants this on the LogController; the top-level flag is deprecated.
+    logController: new LogController({ disableRequestLogging: true }),
     ...(cfg.tls ? { https: { cert: fs.readFileSync(cfg.tls.certFile, "utf8"), key: fs.readFileSync(cfg.tls.keyFile, "utf8") } } : {}),
   } as never) as unknown as FastifyInstance;
 
@@ -48,18 +63,21 @@ export function buildServer(cfg: Config, auth: AuthService): FastifyInstance {
     const isApi = url === "/api" || url.startsWith("/api/");
     const secure = req.headers["x-forwarded-proto"] === "https" || (req as unknown as { socket?: { encrypted?: boolean } }).socket?.encrypted === true;
 
-    // 2. Authentication for all API paths.
+    // 2. Identity for all API paths: existing session cookie, API bearer, or a new
+    //    anonymous session issued right here (this is what replaced the login page).
     let principal: Principal | null = null;
     let csrfCheck: ((supplied: string | undefined) => boolean) | null = null;
-    if (isApi && url !== "/api/v1/auth/exchange") {
+    if (isApi) {
       const cookies = parseCookies(req.headers.cookie);
       const bearer = req.headers.authorization?.startsWith("Bearer ") ? req.headers.authorization.slice(7) : null;
       const web = cookies[COOKIE_NAME] ? auth.webSessionByCookie(cookies[COOKIE_NAME]) : null;
       if (web) { principal = web.principal; csrfCheck = web.csrfOk; }
       else if (bearer) { const p = auth.principalFromBearer(bearer); if (p) principal = p; }
       if (!principal) {
-        reply.code(401).send({ error: { code: "unauthorized", message: "authentication required" } });
-        return;
+        const issued = auth.createWebSession();
+        principal = issued.principal;
+        csrfCheck = issued.csrfOk;
+        reply.header("set-cookie", sessionCookie(issued.cookieValue, secure));
       }
       if (!auth.rateOk(principal.id)) {
         reply.code(429).send({ error: { code: "capacity", message: "rate limited" } });
@@ -85,7 +103,6 @@ export function buildServer(cfg: Config, auth: AuthService): FastifyInstance {
     }
 
     // 4. Headers on everything.
-    void secure;
     reply.header("x-content-type-options", "nosniff");
     reply.header("referrer-policy", "no-referrer");
     reply.header("x-frame-options", "DENY");

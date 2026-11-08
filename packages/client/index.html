@@ -3,11 +3,22 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <meta name="color-scheme" content="dark light" />
+    <meta name="color-scheme" content="light dark" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="stylesheet" href="/fonts/brand-font.css" />
+    <link rel="manifest" href="/manifest.webmanifest" />
     <title>pi-web</title>
   </head>
   <body>
-    <div id="root"></div>
+    <script>try{const p=JSON.parse(localStorage.getItem("piweb:settings:v1")||"{}");const t=p.theme||"system";if(t==="dark"||(t==="system"&&matchMedia("(prefers-color-scheme: dark)").matches)){document.body.setAttribute("data-ds-dark-theme","");document.documentElement.style.colorScheme="dark";}}catch(e){}</script>
+    <div id="root">
+      <div style="height:100%;display:grid;place-items:center;background:#fff">
+        <div style="display:flex;flex-direction:column;align-items:center;gap:16px">
+          <div style="width:20px;height:20px;border-radius:50%;border:2px solid rgba(0,0,0,.1);border-top-color:#0f1115;animation:pwb 0.8s linear infinite"></div>
+        </div>
+      </div>
+      <style>@keyframes pwb{to{transform:rotate(360deg)}}</style>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

@@ -69,8 +69,6 @@ export const TAIL_PARTIAL_MAX = MAX_RECORD_BYTES;
 /** Operation receipt retention after terminal state. */
 export const OPERATION_RETENTION_MS = 24 * 3600_000;
 
-/** Auth bootstrap code TTL. */
-export const BOOTSTRAP_CODE_TTL_MS = 120_000;
 export const SESSION_COOKIE_NAME = "piweb_session";
 export const CSRF_HEADER_NAME = "x-piweb-csrf";
 

@@ -30,7 +30,7 @@ export class Store {
     CREATE INDEX IF NOT EXISTS idx_operations_session ON operations(session_key, accepted_at DESC);
     CREATE TABLE IF NOT EXISTS principals(id TEXT PRIMARY KEY, name TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS web_sessions(id TEXT PRIMARY KEY, csrf_hash TEXT NOT NULL, created_at INTEGER NOT NULL, last_seen INTEGER NOT NULL);
-    CREATE TABLE IF NOT EXISTS bootstrap_codes(hash TEXT PRIMARY KEY, expires_at INTEGER NOT NULL, used INTEGER NOT NULL DEFAULT 0);
+    DROP TABLE IF EXISTS bootstrap_codes;
     `);
   }
   kvGet(key: string): string | undefined {

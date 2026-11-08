@@ -6,7 +6,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import {
   AddWorkspaceSchema,
-  BootstrapExchangeSchema,
   CommandEnvelopeSchema,
   ControlActionSchema,
   CreateSessionSchema,
@@ -35,7 +34,7 @@ import type { ControlGrants } from "./control.ts";
 import type { Operations } from "./operations.ts";
 import { ApiError, shellEscape, type CommandDispatcher } from "./commands.ts";
 import { discoverThemes } from "./themes.ts";
-import { viewFile } from "./files.ts";
+import { viewFile, browseDir } from "./files.ts";
 import type { BridgeDiscovery } from "./drivers.ts";
 import { encodeFrame } from "./hub.ts";
 import { logWarn } from "./log.ts";
@@ -89,26 +88,9 @@ function query<T>(req: FastifyRequest, schema: Parameters<typeof validate>[0]): 
 export function registerRoutes(app: FastifyInstance, ctx: AppCtx) {
   const { auth, sessions, hub, control, ops, dispatcher, cfg } = ctx;
 
-  /* ---------------- auth ---------------- */
-  app.post("/api/v1/auth/exchange", async (req, reply) => {
-    const { code } = body<{ code: string }>(req, BootstrapExchangeSchema);
-    const out = auth.exchangeBootstrap(code);
-    if (!out) throw new ApiError("unauthorized", "bootstrap code invalid, expired, or already used");
-    const secure = (req as unknown as { socket?: { encrypted?: boolean } }).socket?.encrypted === true;
-    reply.header("set-cookie", `piweb_session=${out.cookieValue}; HttpOnly; SameSite=Strict; Path=/; Max-Age=2592000${secure ? "; Secure" : ""}`);
-    return { csrf: out.csrf };
-  });
-
-  app.post("/api/v1/auth/login", async (req, reply) => {
-    // Internal: establish cookie from an existing bearer principal (SSH-forwarded CLI use).
-    const p = principal(req);
-    if (p.kind !== "api") throw new ApiError("forbidden", "bearer token cannot create browser sessions");
-    const out = auth.createWebSession();
-    const secure = (req as unknown as { socket?: { encrypted?: boolean } }).socket?.encrypted === true;
-    reply.header("set-cookie", `piweb_session=${out.cookieValue}; HttpOnly; SameSite=Strict; Path=/; Max-Age=2592000${secure ? "; Secure" : ""}`);
-    return { csrf: out.csrf };
-  });
-
+  /* ---------------- identity (there is no login) ----------------
+   * The session cookie is issued by the request pipeline itself (see http.ts), so these two
+   * reads only say who you are and hand over the double-submit CSRF token. */
   app.get("/api/v1/auth/me", async (req) => {
     const p = principal(req);
     return { id: p.id, name: p.name, kind: p.kind };
@@ -121,14 +103,6 @@ export function registerRoutes(app: FastifyInstance, ctx: AppCtx) {
     const csrf = newOpaqueId(18);
     auth.rotateCsrf(p.id, csrf);
     return { csrf };
-  });
-
-  app.post("/api/v1/auth/logout", async (req, reply) => {
-    const cookies = req.headers.cookie ?? "";
-    const m = /(?:^|;\s*)piweb_session=([^;]+)/.exec(cookies);
-    if (m) auth.logoutWeb(decodeURIComponent(m[1]!));
-    reply.header("set-cookie", "piweb_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0");
-    return { ok: true };
   });
 
   /* ---------------- meta ---------------- */
@@ -418,6 +392,13 @@ export function registerRoutes(app: FastifyInstance, ctx: AppCtx) {
     const ws = sessions.workspaces.get(q.workspaceKey);
     if (!ws) throw new ApiError("not_found", "unknown workspaceKey");
     return viewFile(ws.path, q.path);
+  });
+
+  /* Names-only directory listing for the "select workspace directory" picker. */
+  app.get("/api/v1/browse", async (req) => {
+    principal(req);
+    const q = (req.query ?? {}) as { path?: string };
+    return browseDir(q.path ?? "");
   });
 
   /* ---------------- SSE ---------------- */

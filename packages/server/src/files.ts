@@ -54,6 +54,50 @@ export async function containedResolve(root: string, relPath: string): Promise<s
   return check;
 }
 
+/**
+ * Directory listing for the workspace picker ("select a folder" dialog). Unlike viewFile
+ * this is not scoped to an allowlisted workspace - it is the thing the allowlist is built
+ * from - so it is names-only: entry names and whether each is a directory, never contents,
+ * never sizes, never following symlinks. Resolution stays loopback-only behind the same
+ * principal/CSRF/Host fences as every other route.
+ */
+export async function browseDir(requested: string): Promise<{
+  path: string;
+  parent: string | null;
+  home: string;
+  entries: { name: string; kind: "dir" | "file" }[];
+  truncated: boolean;
+}> {
+  const os = await import("node:os");
+  const home = os.homedir();
+  const target = requested && requested !== "" ? requested : home;
+  if (!path.isAbsolute(target)) throw new ApiError("invalid_request", "path must be absolute");
+  let real: string;
+  try { real = await fsp.realpath(target); } catch { throw new ApiError("not_found", "path does not exist"); }
+  const st = await fsp.stat(real).catch(() => null);
+  if (!st?.isDirectory()) throw new ApiError("invalid_request", "path is not a directory");
+  const dirents = await fsp.readdir(real, { withFileTypes: true });
+  const entries: { name: string; kind: "dir" | "file" }[] = [];
+  for (const de of dirents.slice(0, 2000)) {
+    let kind: "dir" | "file" = de.isFile() ? "file" : de.isDirectory() ? "dir" : "file";
+    if (de.isSymbolicLink()) {
+      // never traverse a symlink for the picker: show it as a file unless its target is a
+      // directory inside the same listing (cheap check, no content read).
+      try { kind = (await fsp.stat(path.join(real, de.name))).isDirectory() ? "dir" : "file"; } catch { kind = "file"; }
+    }
+    entries.push({ name: de.name, kind });
+  }
+  entries.sort((a, b) => (a.kind === b.kind ? a.name.localeCompare(b.name) : a.kind === "dir" ? -1 : 1));
+  const parent = path.dirname(real);
+  return {
+    path: real,
+    parent: parent === real ? null : parent,
+    home,
+    entries,
+    truncated: dirents.length > entries.length,
+  };
+}
+
 export async function viewFile(root: string, relPath: string): Promise<FileView> {
   const full = await containedResolve(root, relPath);
   let st: fs.Stats;

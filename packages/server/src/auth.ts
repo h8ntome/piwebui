@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { BOOTSTRAP_CODE_TTL_MS, CSRF_HEADER_NAME, DEFAULT_BIND, DEFAULT_PORT, SESSION_COOKIE_NAME } from "@piwebui/shared";
+import { CSRF_HEADER_NAME, DEFAULT_BIND, DEFAULT_PORT, SESSION_COOKIE_NAME } from "@piwebui/shared";
 import { Store } from "./store.ts";
 
 export interface TlsConfig { certFile: string; keyFile: string; }
@@ -88,11 +88,14 @@ export function randomSecret(bytes = 32): string {
 }
 
 export interface Principal {
-  id: string; // "web:<sid>" or "api:<pid>" or "anonymous"
+  id: string; // "web:<sid>" or "api:<pid>"
   name: string;
   kind: "web" | "api";
-  csrf?: string; // plaintext for web sessions (returned once at exchange)
+  csrf?: string; // plaintext CSRF token handed to the browser once, at session creation
 }
+
+/** Anonymous browser sessions are dropped once untouched for this long. */
+export const WEB_SESSION_TTL_MS = 30 * 24 * 3600_000;
 
 export class AuthService {
   constructor(private store: Store, private cfg: Config) {}
@@ -110,32 +113,22 @@ export class AuthService {
     return t;
   }
 
-  mintBootstrapCode(ttlMs = BOOTSTRAP_CODE_TTL_MS): string {
-    const code = crypto.randomBytes(12).toString("base64url");
-    this.store.db
-      .prepare("INSERT INTO bootstrap_codes(hash, expires_at) VALUES(?, ?)")
-      .run(hash(code), Date.now() + ttlMs);
-    return code;
-  }
-
-  /** One-use exchange: returns a new web principal or null. */
-  exchangeBootstrap(code: string): { principal: Principal; csrf: string; cookieValue: string } | null {
-    const now = Date.now();
-    this.store.db.prepare("DELETE FROM bootstrap_codes WHERE expires_at < ?").run(now);
-    const row = this.store.db.prepare("SELECT hash FROM bootstrap_codes WHERE hash=? AND used=0").get(hash(code)) as { hash: string } | undefined;
-    if (!row) return null;
-    this.store.db.prepare("UPDATE bootstrap_codes SET used=1 WHERE hash=?").run(row.hash);
-    return this.createWebSession();
-  }
-
-  createWebSession(): { principal: Principal; csrf: string; cookieValue: string } {
+  /** Open a browser session without a login step: cookie value + its double-submit token. */
+  createWebSession(): { principal: Principal; csrf: string; cookieValue: string; csrfOk: (supplied: string | undefined) => boolean } {
+    this.pruneWebSessions();
     const id = randomSecret(24);
     const csrf = randomSecret(24);
     const hId = hash(id);
+    const csrfHash = hash(csrf);
     this.store.db
       .prepare("INSERT INTO web_sessions(id, csrf_hash, created_at, last_seen) VALUES(?,?,?,?)")
-      .run(hId, hash(csrf), Date.now(), Date.now());
-    return { principal: { id: `web:${hId}`, name: "browser", kind: "web", csrf }, csrf, cookieValue: id };
+      .run(hId, csrfHash, Date.now(), Date.now());
+    return {
+      principal: { id: `web:${hId}`, name: "browser", kind: "web", csrf },
+      csrf,
+      cookieValue: id,
+      csrfOk: (supplied) => !!supplied && hash(supplied) === csrfHash,
+    };
   }
 
   webSessionByCookie(cookieValue: string): { principal: Principal; csrfOk: (supplied: string | undefined) => boolean } | null {
@@ -156,11 +149,14 @@ export class AuthService {
     return res.changes > 0;
   }
 
-  logoutWeb(cookieValue: string) {
-    this.store.db.prepare("DELETE FROM web_sessions WHERE id=?").run(hash(cookieValue));
-  }
-  logoutAllWeb() {
-    this.store.db.prepare("DELETE FROM web_sessions").run();
+  private lastPruneMs = 0;
+
+  /** Cookie-less probes (scanners, health checks, new tabs) would otherwise pile up sessions forever. */
+  pruneWebSessions(maxAgeMs = WEB_SESSION_TTL_MS): void {
+    const now = Date.now();
+    if (now - this.lastPruneMs < 300_000) return;
+    this.lastPruneMs = now;
+    this.store.db.prepare("DELETE FROM web_sessions WHERE last_seen < ?").run(now - maxAgeMs);
   }
 
   mintApiToken(name: string): { token: string; id: string } {

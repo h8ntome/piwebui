@@ -7,6 +7,10 @@ data/
 packages/client/dist/
 *.tsbuildinfo
 
+# REA evidence bundles are reproducible analysis output, not project source;
+# the derived note lives in docs/research/dsh-web-launch.md.
+docs/research/rea-*.json
+
 # --- hygiene ---
 *.db
 *.db-wal
