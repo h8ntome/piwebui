@@ -135,6 +135,9 @@ export class Sessions {
   /** pi session UUID -> rec (D-3): the identity that exists before the file does. */
   bySessionId = new Map<string, SessionRec>();
   workspaces = new Map<string, WorkspaceInfo>();
+  /** Paths the user deleted (lazily loaded, see `isHidden`). */
+  private hidden = new Set<string>();
+  private hiddenLoaded = false;
   /** Machine-wide bridge facts, reported by `/api/v1/bridge/diagnose`. */
   bridgeDiag: { mode: string; listener: string; rejects: Record<string, number> } | null = null;
 
@@ -178,7 +181,16 @@ export class Sessions {
     if (!w) return false;
     this.store.db.prepare("DELETE FROM workspaces WHERE key=?").run(key);
     this.workspaces.delete(key);
-    for (const rec of this.byKey.values()) if (rec.workspaceKey === key) { rec.workspaceKey = null; if (rec.kind !== "managed") rec.conflict = { kind: "unknown", observedAt: new Date().toISOString(), detail: "Workspace removed from allowlist: file access revoked; ongoing runs untouched." }; }
+    for (const rec of this.byKey.values()) if (rec.workspaceKey === key) {
+      rec.workspaceKey = null;
+      if (rec.kind !== "managed") {
+        rec.conflict = { kind: "unknown", observedAt: new Date().toISOString(), detail: `Workspace removed from the allowlist: its files are no longer readable here (${w.path}). Re-add the folder to read this session again; ongoing runs were untouched.` };
+      } else if (rec.driver) {
+        // Still running, still promptable, but its transcript is behind the fence now: say so in
+        // the status instead of letting the UI discover a bare 403 (BUG-014).
+        rec.conflict = { kind: "unknown", observedAt: new Date().toISOString(), detail: `The workspace that owned this session (${w.path}) was removed from the allowlist. The run keeps going, but its file is not readable until the folder is allowed again.` };
+      }
+    }
     return true;
   }
 
@@ -323,6 +335,63 @@ export class Sessions {
     if (sid && this.bySessionId.get(sid) === rec) this.bySessionId.delete(sid);
     this.stopWatch(rec);
     this.hub.drop(rec.key);
+  }
+
+  /* ---------------- deletion ("forget this session in pi-web") ---------------- */
+
+  /** Paths the user deleted; kept because pi-web never deletes the session file itself. */
+  isHidden(p: string | null): boolean {
+    if (!p) return false;
+    if (!this.hiddenLoaded) {
+      this.hiddenLoaded = true;
+      try {
+        this.hidden = new Set((this.store.db.prepare("SELECT path FROM hidden_sessions").all() as { path: string }[]).map((r) => r.path));
+      } catch { this.hidden = new Set(); }
+    }
+    return this.hidden.has(p);
+  }
+
+  hiddenList(): { path: string; sessionKey: string | null; name: string | null; hiddenAt: string }[] {
+    try {
+      return (this.store.db.prepare("SELECT path,session_key,name,hidden_at FROM hidden_sessions ORDER BY hidden_at DESC").all() as Record<string, string | null>[])
+        .map((r) => ({ path: String(r.path), sessionKey: r.session_key ?? null, name: r.name ?? null, hiddenAt: String(r.hidden_at) }));
+    } catch { return []; }
+  }
+
+  unhide(p: string): boolean {
+    const changed = this.store.db.prepare("DELETE FROM hidden_sessions WHERE path=?").run(p).changes > 0;
+    this.hidden.delete(p);
+    return changed;
+  }
+
+  /**
+   * Retire a session from pi-web: stop the runtime we own, drop the registry row, and hide the
+   * file so the next list refresh does not silently bring the row back. The session file on disk is
+   * never touched. A live terminal (bridged) session is refused by the caller instead: disconnecting
+   * someone else's running pi is not what "delete" should mean.
+   */
+  retire(rec: SessionRec, reason: string): { hidden: string | null } {
+    const driver = rec.driver as unknown as ({ markIntentionalExit?: () => void; dispose?: (r: string) => void; kind?: string } | null);
+    if (driver && driver.kind !== "bridge") {
+      driver.markIntentionalExit?.();
+      driver.dispose?.(reason);
+    } else if (driver) {
+      try { driver.dispose?.(reason); } catch { /* socket already gone */ }
+    }
+    rec.driver = null;
+    rec.released = true;
+    if (rec.path) {
+      this.store.db.prepare("INSERT INTO hidden_sessions(path,session_key,name,hidden_at) VALUES(?,?,?,?) ON CONFLICT(path) DO UPDATE SET session_key=excluded.session_key, name=excluded.name, hidden_at=excluded.hidden_at")
+        .run(rec.path, rec.key, rec.meta.name ?? rec.meta.firstPrompt ?? null, new Date().toISOString());
+      this.hidden.add(rec.path);
+      this.store.db.prepare("DELETE FROM file_claims WHERE path=?").run(rec.path);
+    }
+    this.store.db.prepare("DELETE FROM sessions WHERE key=?").run(rec.key);
+    this.store.db.prepare("DELETE FROM control_grants WHERE session_key=?").run(rec.key);
+    this.store.db.prepare("DELETE FROM operations WHERE session_key=?").run(rec.key);
+    this.forget(rec);
+    this.emitGlobal("sessionRetired", { sessionKey: rec.key, reason });
+    return { hidden: rec.path ?? null };
   }
 
   /** Machine-wide event (03 §5): `runtimeAttached`, `sessionAppeared`, ... */
@@ -524,6 +593,11 @@ export class Sessions {
         rec.file.fingerprint = page.nextCursor ?? null;
         rec.state.entryCount = page.entryCount;
         rec.file.exists = true;
+        // The first read has to establish the same facts an append would: model_change and
+        // thinking_level_change are the first entries of every session file, and skipping them left
+        // a freshly created session showing "Select model" / "Model —" until its first run ended
+        // (BUG-007).
+        for (const e of page.entries) await this.applyEntryToState(rec, e);
         void this.refreshMeta(rec);
       } catch (e) {
         rec.file.lastError = String((e as Error).message).slice(0, 120);
@@ -564,6 +638,7 @@ export class Sessions {
       rec.file.recentIds = new Set(page.entries.map((e) => e.entryId));
       rec.file.offset = (await fs.promises.stat(rec.path!)).size;
       rec.state.entryCount = page.entryCount;
+      for (const e of page.entries) await this.applyEntryToState(rec, e); // see BUG-007 above
       void this.refreshMeta(rec);
     } catch { /* retry next tick */ }
   }
@@ -652,10 +727,26 @@ export class Sessions {
   applyDriverEvent(rec: SessionRec, ev: { name: string; payload: Record<string, unknown> }) {
     const s = rec.state;
     const key = rec.key;
+    const boundPreviews = () => {
+      // A runtime that mints a preview per streamed chunk (or dies mid-stream) must not be able to
+      // grow this map without bound: it is replayed in every snapshot, so the transcript would
+      // accumulate ghost rows that never resolve (BUG-004). The managed host caps at 8; do the same
+      // here so any bridge, old or new, is bounded from the server side too.
+      while (s.previews.size > 8) {
+        const oldest = s.previews.keys().next().value as string | undefined;
+        if (oldest === undefined) break;
+        const drop = s.previews.get(oldest);
+        if (!drop) { s.previews.delete(oldest); continue; }
+        drop.done = true;
+        this.hub.emit(key, "preview", drop, { liveMessageId: drop.liveMessageId, source: "runtime", replaceKey: `preview:${drop.liveMessageId}` });
+        s.previews.delete(oldest);
+      }
+    };
     switch (ev.name) {
       case "message_start": {
         const id = String(ev.payload.liveMessageId);
         s.previews.set(id, { liveMessageId: id, role: (ev.payload.role as "user" | "assistant") ?? "assistant", rev: 0, blocks: [], startedAt: new Date().toISOString(), done: false });
+        boundPreviews();
         this.hub.emit(key, "preview", s.previews.get(id), { liveMessageId: id, source: "runtime" });
         if (s.phase === "idle") { s.phase = "streaming"; this.hub.emit(key, "runtimeState", this.runtimePayload(rec)); }
         break;
@@ -664,6 +755,7 @@ export class Sessions {
         const p = ev.payload.preview as PreviewState;
         if (p) {
           s.previews.set(p.liveMessageId, p);
+          boundPreviews();
           this.hub.emit(key, "preview", p, { liveMessageId: p.liveMessageId, source: "runtime", replaceKey: `preview:${p.liveMessageId}` });
         }
         break;
@@ -679,6 +771,10 @@ export class Sessions {
         if (le && me) {
           const p = s.previews.get(le);
           if (p) { p.mappedEntryId = me; p.done = true; }
+        }
+        // Anything still open after a turn boundary is finished business, not a live stream.
+        for (const p of s.previews.values()) {
+          if (!p.done && p.role === "assistant") { p.done = true; this.hub.emit(key, "preview", p, { liveMessageId: p.liveMessageId, source: "runtime", replaceKey: `preview:${p.liveMessageId}` }); }
         }
         this.hub.emit(key, "runtimeState", this.runtimePayload(rec));
         break;
@@ -701,6 +797,7 @@ export class Sessions {
       case "agent_settled": {
         s.lastSettled = { at: new Date().toISOString(), aborted: !!ev.payload.aborted };
         s.phase = "idle";
+        for (const p of s.previews.values()) p.done = true; // nothing can still be streaming
         this.onOperationLifecycle(rec, "agent_settled", { aborted: !!ev.payload.aborted });
         this.hub.emit(key, "runtimeState", this.runtimePayload(rec));
         this.scheduleSettledCleanup(rec);
@@ -1027,6 +1124,35 @@ export class Sessions {
   }
 
   hasCapacity(): boolean {
-    return this.managedCount() < Math.min(MAX_MANAGED_RUNTIMES, this.cfg.maxManaged);
+    const limit = Math.min(MAX_MANAGED_RUNTIMES, this.cfg.maxManaged);
+    if (this.managedCount() < limit) return true;
+    // At the limit. Before refusing, give back a slot held by a host that has never run and that
+    // nobody is watching: an abandoned "New session" click used to hold one of the four slots
+    // forever, and with no delete affordance the only exit was to find each row by hand (BUG-017).
+    const victims = [...this.byKey.values()]
+      .filter((r) => r.kind === "managed" && r.driver && !r.released
+        && r.state.phase === "unknown"
+        && r.state.previews.size === 0 && r.state.tools.size === 0 && r.state.dialogs.size === 0
+        && !this.hub.getStream(r.key).hasSubs())
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    const victim = victims[0];
+    if (!victim) return false;
+    logInfo("capacity_reclaimed_never_run", { key: victim.key.slice(0, 10), active: this.managedCount() });
+    const d = victim.driver as unknown as { markIntentionalExit?: () => void; dispose: (r: string) => void };
+    d.markIntentionalExit?.();
+    d.dispose("capacity reclaim");
+    victim.released = true;
+    if (!victim.path) this.unregisterPhantom(victim);
+    return this.managedCount() < limit;
+  }
+
+  /** A session that never produced a file leaves nothing behind; drop the row with the host. */
+  private unregisterPhantom(rec: SessionRec) {
+    if (rec.path) return;
+    this.store.db.prepare("DELETE FROM sessions WHERE key=?").run(rec.key);
+    this.store.db.prepare("DELETE FROM control_grants WHERE session_key=?").run(rec.key);
+    this.store.db.prepare("DELETE FROM operations WHERE session_key=?").run(rec.key);
+    this.forget(rec);
+    this.emitGlobal("sessionRetired", { sessionKey: rec.key, reason: "capacity-reclaim" });
   }
 }

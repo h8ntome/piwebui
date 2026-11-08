@@ -72,6 +72,25 @@ function parseFlags(argv: string[]): Record<string, string | boolean> {
   return out;
 }
 
+/**
+ * Positional arguments of a subcommand, i.e. everything that is not a flag or a flag's value.
+ * Reading `argv[1]` as the positional made `pi-web allow --data-dir X` take "--data-dir" as the
+ * directory and `trust-runtime --data-dir X` as the runtime id (BUG-018).
+ */
+function positionals(argv: string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i]!;
+    if (a.startsWith("--")) {
+      const next = argv[i + 1];
+      if (next && !next.startsWith("--")) i++; // this flag consumed that value
+      continue;
+    }
+    out.push(a);
+  }
+  return out;
+}
+
 const HELP = `pi-web — local web UI for pi sessions (no login: open the URL and you are in)
 
   pi-web                        start the server and open the browser (loopback)
@@ -79,7 +98,7 @@ const HELP = `pi-web — local web UI for pi sessions (no login: open the URL an
                 [--agent-dir DIR] [--tls-cert F --tls-key F] [--open|--no-open]
   pi-web allow <absolute-dir>   allowlist a workspace whose sessions pi-web may read
   pi-web workspaces             list allowlisted workspaces
-  pi-web mint-token [--name n]  print a long-lived API bearer token
+  pi-web mint-token [--label n] [--list]  print a long-lived API bearer token, or list them
   pi-web revoke-token --id ID   revoke an API token
   pi-web install-extension      copy the terminal bridge into ~/.pi/agent/extensions (prefer pi install)
   pi-web install-bridge         (deprecated alias of install-extension)
@@ -87,6 +106,8 @@ const HELP = `pi-web — local web UI for pi sessions (no login: open the URL an
   pi-web rotate-bridge-token    new bridge secret + descriptor rewrite
   pi-web trust-runtime <id>     allow a runtime that was revoked (or when autoTrust=false)
   pi-web revoke-runtime <id>    drop and distrust a runtime now
+  pi-web hidden                 list sessions deleted in pi-web (their files are still on disk)
+  pi-web unhide <path>          put one of them back in the list
   pi-web pair                   env line for bridging a pi on another host over an ssh tunnel
   pi-web deprecate-bridge       what changed in the bridge transport, and the cleanup command
 
@@ -118,7 +139,7 @@ Environment: PIWEB_PORT PIWEB_BIND PIWEB_DATA_DIR PIWEB_HOSTS_ALLOW PIWEB_ORIGIN
 /** Flags the CLI understands; anything else is a typo worth reporting. */
 const KNOWN_FLAGS = new Set([
   "port", "bind", "data-dir", "host-allow", "origins-allow", "agent-dir", "tls-cert", "tls-key",
-  "open", "no-open", "name", "id", "help", "h", "version", "v", "V",
+  "open", "no-open", "name", "label", "id", "list", "help", "h", "version", "v", "V",
   "bridge-mode", "bridge-socket", "no-attest", "json", "ttl",
 ]);
 
@@ -571,9 +592,14 @@ export async function runCli(argv: string[] = process.argv.slice(2)): Promise<vo
   const cmd = argv[0]!;
   if (cmd === "help") { process.stdout.write(HELP); return; }
   const flags = parseFlags(argv.slice(1));
+  // `--help`/`--version` mean the same thing after a subcommand as before it; before this they
+  // were swallowed and the subcommand ran anyway (BUG-024).
+  if (wantsHelp) { process.stdout.write(HELP); return; }
+  if (wantsVersion) { printVersion(); return; }
+  const badCmdFlags = unknownFlags(argv.slice(1));
+  if (badCmdFlags.length) { process.stderr.write(`unknown flag(s) for \`${cmd}\`: ${badCmdFlags.join(", ")}\n\n${HELP}`); process.exit(2); }
+  const rest = positionals(argv.slice(1));
   if (cmd === "serve") {
-    const bad = unknownFlags(argv.slice(1));
-    if (bad.length) { process.stderr.write(`unknown flag(s): ${bad.join(", ")}\n\n${HELP}`); process.exit(2); }
     await serve(flags);
     return;
   }
@@ -581,16 +607,32 @@ export async function runCli(argv: string[] = process.argv.slice(2)): Promise<vo
   const store = new Store(path.join(cfg.dataDir, "metadata.db"));
   const auth = new AuthService(store, cfg);
   if (cmd === "mint-token") {
-    const name = String(flags.name ?? "cli");
-    const t = auth.mintApiToken(name);
-    console.log(t.token);
-    console.error(`token id: ${t.id}`);
+    if (flags.list) {
+      const rows = auth.listApiTokens();
+      if (!rows.length) { console.log("(no API tokens: pi-web mint-token --label <name>)"); }
+      else for (const r of rows) console.log(`${r.id}\t${r.name}\t${r.created_at}`);
+    } else {
+      // `--label` was documented but never read, so every token came out named "cli".
+      const name = String(flags.label ?? flags.name ?? "cli");
+      const t = auth.mintApiToken(name);
+      console.log(t.token);
+      console.error(`token id: ${t.id}`);
+    }
   } else if (cmd === "revoke-token") {
-    console.log(String(auth.revokeApiToken(String(flags.id ?? ""))));
+    const id = String(flags.id ?? rest[0] ?? "");
+    if (!id) { console.error("usage: pi-web revoke-token --id <id>  (list them with: pi-web mint-token --list)"); process.exit(2); }
+    if (!auth.revokeApiToken(id)) { console.error(`no API token with id ${id} (list them with: pi-web mint-token --list)`); process.exit(1); }
+    console.log("true");
   } else if (cmd === "allow") {
-    const p = argv[1];
+    const p = rest[0];
     if (!p) { console.error("usage: pi-web allow <absolute-directory>"); process.exit(2); }
-    const canon = fs.realpathSync(path.resolve(p));
+    let canon: string;
+    try {
+      canon = fs.realpathSync(path.resolve(p));
+    } catch {
+      console.error(`no such directory: ${p}`);
+      process.exit(2);
+    }
     if (!fs.statSync(canon).isDirectory()) { console.error("not a directory"); process.exit(2); }
     const key = "w_" + crypto.randomBytes(6).toString("hex");
     store.db.prepare("INSERT INTO workspaces(key,path,label,added_at) VALUES(?,?,?,?) ON CONFLICT(path) DO NOTHING").run(key, canon, path.basename(canon), new Date().toISOString());
@@ -636,26 +678,49 @@ export async function runCli(argv: string[] = process.argv.slice(2)): Promise<vo
     console.log(`# zero-config: pi-web already published ${descriptorPath(cfg.dataDir)}`);
   } else if (cmd === "rotate-bridge-token") {
     const next = auth.rotateBridgeToken();
-    const socketPath = flags["bridge-socket"] ? String(flags["bridge-socket"]) : bridgeSocketPath(cfg.dataDir, auth.serverId());
+    // A CLI rotation must not rewrite the descriptor as if the CLI were the server: it used to
+    // stamp its own short-lived pid and the default :4319 URL, so a running server on another
+    // port left bridges aimed at the wrong place and `doctor` compared against those fields.
+    const prev = readDescriptor(descriptorPath(cfg.dataDir));
+    const live = prev.ok ? prev.descriptor : null;
+    const socketPath = flags["bridge-socket"] ? String(flags["bridge-socket"])
+      : live?.socket ?? bridgeSocketPath(cfg.dataDir, auth.serverId());
     writeDescriptor({
-      dataDir: cfg.dataDir, serverId: auth.serverId(), socket: socketPath, token: next,
-      http: `http://${cfg.bind}:${cfg.port}`, piwebVersion: packageVersion(),
+      dataDir: cfg.dataDir,
+      serverId: live?.serverId ?? auth.serverId(),
+      socket: socketPath,
+      token: next,
+      http: live?.http ?? `http://${cfg.bind}:${cfg.port}`,
+      piwebVersion: live?.piwebVersion ?? packageVersion(),
+      ...(live ? { startedAt: live.startedAt, pid: live.pid, procStart: live.procStart } : {}),
     });
     console.log("New bridge token written to " + descriptorPath(cfg.dataDir) + " (never printed).");
     console.log("A running pi-web still holds the old token in memory: restart it, or POST /api/v1/bridge/rotate-token.");
     console.log("Bridges reconnect on their own within their retry window (<= 15 s).");
   } else if (cmd === "trust-runtime") {
-    const id = argv[1];
+    const id = rest[0];
     if (!id) { console.error("usage: pi-web trust-runtime <runtimeId>"); process.exit(2); }
     const row = store.runtimeGet(id);
     if (!row) { console.error(`unknown runtimeId ${id} (seen them with: pi-web doctor)`); process.exit(1); }
     store.runtimeSetTrusted(id, true);
     console.log(`trusted runtime ${id}`);
   } else if (cmd === "revoke-runtime") {
-    const id = argv[1];
+    const id = rest[0];
     if (!id) { console.error("usage: pi-web revoke-runtime <runtimeId>"); process.exit(2); }
     const changed = store.runtimeSetTrusted(id, false);
-    console.log(changed ? `revoked runtime ${id}; it cannot connect until you trust it again` : `unknown runtimeId ${id}`);
+    if (!changed) { console.error(`unknown runtimeId ${id}`); process.exit(1); }
+    console.log(`revoked runtime ${id}; it cannot connect until you trust it again`);
+  } else if (cmd === "hidden") {
+    const rows = store.db.prepare("SELECT path,session_key,name,hidden_at FROM hidden_sessions ORDER BY hidden_at DESC").all() as { path: string; session_key: string | null; name: string | null; hidden_at: string }[];
+    if (!rows.length) console.log("(no deleted sessions: `pi-web delete <session>` hides one)");
+    for (const r of rows) console.log(`${r.path}\t${r.name ?? r.session_key ?? ""}\t${r.hidden_at}`);
+  } else if (cmd === "unhide") {
+    const p = rest[0];
+    if (!p) { console.error("usage: pi-web unhide <absolute-path-to-session.jsonl>"); process.exit(2); }
+    const canon = path.resolve(p);
+    const changed = store.db.prepare("DELETE FROM hidden_sessions WHERE path=?").run(canon).changes > 0;
+    if (!changed) { console.error(`no hidden session at ${canon} (list them with: pi-web hidden)`); process.exit(1); }
+    console.log(`unhidden: ${canon} — a running pi-web lists it again on its next refresh`);
   } else if (cmd === "pair") {
     // Documentation aid for the ssh -L story, not the zero-config path.
     const d = readDescriptor(descriptorPath(cfg.dataDir));

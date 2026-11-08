@@ -14,6 +14,35 @@ function dedupeBy<T>(xs: T[], key: (x: T) => string): T[] {
   return out;
 }
 
+/**
+ * Merge the facts carried by `GET /sessions/:key` into the streamed runtime view.
+ * `runtime` (from the SSE snapshot) is what the composer chip, `canSendNow` and the Context panel
+ * read; `status.runtime` (from the polling endpoint) carries the same model/thinking/name facts
+ * plus the phase, so a refresh can correct a view that predates the last turn. Anything the status
+ * does not know (previews, tools, queue) is left exactly as the stream reported it - we never
+ * synthesise state here.
+ */
+function foldStatusIntoRuntime(runtime: RuntimeState | null, status: SessionStatusLite | undefined): RuntimeState | null {
+  const r = status?.runtime;
+  if (!r && !status) return runtime;
+  const phase = status?.state && status.state !== "unavailable" ? status.state : runtime?.phase ?? "unknown";
+  return {
+    phase,
+    isStreaming: phase === "streaming" || phase === "compacting" || phase === "retrying" || phase === "awaiting_dialog",
+    previews: runtime?.previews ?? [],
+    tools: runtime?.tools ?? [],
+    queue: runtime?.queue ?? { hasPending: false, count: 0, items: [], note: "" },
+    model: r?.model ?? runtime?.model ?? null,
+    thinkingLevel: r?.thinkingLevel ?? runtime?.thinkingLevel ?? null,
+    sessionName: r?.sessionName ?? runtime?.sessionName ?? null,
+    contextUsage: runtime?.contextUsage ?? null,
+    leafEntryId: status?.leaf?.entryId ?? runtime?.leafEntryId ?? null,
+    lastSettled: runtime?.lastSettled ?? null,
+    retry: runtime?.retry ?? null,
+    compaction: runtime?.compaction ?? null,
+  };
+}
+
 export interface EntryView {
   entryId: string; parentId: string | null; type: string; timestamp: string;
   raw: Record<string, unknown>; byteOffset: number; byteLength: number;
@@ -140,6 +169,8 @@ interface Store {
   filesWorkspaceKey: string | null;
   setFilesWorkspaceKey: (key: string | null) => void;
   removeWorkspace: (key: string) => Promise<void>;
+  deleteSession: (key: string) => Promise<void>;
+  hiddenCount: number;
   addWorkspace: (path: string, label?: string) => Promise<string | null>;
   browse: (path: string) => Promise<BrowseResult | null>;
   readFile: (workspaceKey: string, path: string) => Promise<FileView | null>;
@@ -176,7 +207,16 @@ export const useStore = create<Store>((set, get) => {
   const refreshStatus = async (key: string) => {
     try {
       const out = await api.get<{ meta: SessionMeta; status: SessionStatusLite }>(`/api/v1/sessions/${encodeURIComponent(key)}`);
-      patch(key, (v) => ({ ...v, status: out.status ?? v.status, meta: out.meta ?? v.meta }));
+      patch(key, (v) => ({
+        ...v,
+        status: out.status ?? v.status,
+        meta: out.meta ?? v.meta,
+        // The composer chip, canSendNow and the Context panel all read `runtime`, not `status`.
+        // Refreshing only the latter left them reporting whatever a snapshot said when the stream
+        // first attached - stale counts and composer state until a hard reload (BUG-008). The
+        // status answer carries the same facts, so fold them in without inventing any.
+        runtime: foldStatusIntoRuntime(v.runtime, out.status),
+      }));
       if (out.status?.capabilities?.canControl && !grants.has(key)) void get().acquireControl(key);
     } catch { /* the stream will offer another chance */ }
   };
@@ -197,16 +237,18 @@ export const useStore = create<Store>((set, get) => {
    * Commands are asynchronous: the POST only says "accepted". Poll the operation
    * receipt so the owner can report "no" (bad model, thinking level not supported…).
    */
-  const watchOperation = (opId: string) => {
+  const watchOperation = (opId: string, sessionKey?: string) => {
     const poll = async (delay: number) => {
       window.setTimeout(async () => {
         try {
           const rec = await api.get<{ state: string; result?: { error?: { message?: string; code?: string } } }>(`/api/v1/operations/${encodeURIComponent(opId)}`);
+          // A failure belongs to the session the command was sent for, not whichever row happens
+          // to be open when the receipt comes back (BUG-027).
+          const k = sessionKey ?? get().activeKey;
           if (rec.state === "failed" || rec.state === "unknown" || rec.state === "cancelled") {
             const msg = humaniseError(rec.result?.error?.message ?? `${rec.state}`);
             set({ lastOperation: { id: opId, state: rec.state, message: msg } });
             toast.error(msg);
-            const k = get().activeKey;
             if (k) {
               patch(k, (v) => ({ ...v, notes: [...v.notes.slice(-3), msg] }));
               window.setTimeout(() => patch(k, (v) => ({ ...v, notes: v.notes.filter((n) => n !== msg) })), 9000);
@@ -215,7 +257,6 @@ export const useStore = create<Store>((set, get) => {
             set({ lastOperation: { id: opId, state: "succeeded" } });
             // The runtime is now the authority again: pull status so a model/thinking switch
             // shows in the chip, the menu tick and the panel within a second (CTL-03).
-            const k = get().activeKey;
             if (k) { await refreshStatus(k); void get().loadCatalogue(k); }
           } else {
             if (delay < 8000) await poll(delay * 2);
@@ -227,7 +268,11 @@ export const useStore = create<Store>((set, get) => {
   };
 
   const attachSse = (key: string) => {
-    if (sses.has(key)) return;
+    // Re-attaching a session whose stream never delivered a snapshot (tab restored, stream died
+    // before the first frame) has to actually re-subscribe; the old unconditional early-return
+    // meant "open this session again" never re-read it (BUG-008).
+    if (sses.has(key) && get().views[key]?.runtime) return;
+    sses.get(key)?.close();
     sses.set(key, new SseManager(key, {
       onOpen: () => patch(key, (v) => ({ ...v, sse: "live" })),
       onStatus: (s) => patch(key, (v) => ({ ...v, sse: s })),
@@ -251,7 +296,7 @@ export const useStore = create<Store>((set, get) => {
 
   return {
     ready: false, error: null, bootAttempts: 0, serverDown: false, health: null, workspaces: [], sessions: [], activeKey: null,
-    views: {}, lastOperation: null, heroWorkspace: null, filesWorkspaceKey: null,
+    views: {}, lastOperation: null, heroWorkspace: null, filesWorkspaceKey: null, hiddenCount: 0,
 
     // No login: the server hands out a browser session on the first request, so booting is
     // just "talk to the server, then show the chats".
@@ -460,7 +505,7 @@ export const useStore = create<Store>((set, get) => {
       try {
         const out = await resend();
         set({ lastOperation: { id: opId, state: out.state ?? "accepted" } });
-        watchOperation(opId);
+        watchOperation(opId, key);
         setTimeout(() => { void get().refreshSessions(); }, 900);
         // A model/thinking change lands inside the runtime a moment after the POST returns;
         // re-read status so the chip and the menu tick stop showing the previous value.
@@ -479,7 +524,7 @@ export const useStore = create<Store>((set, get) => {
               const g = grants.get(key)!;
               const out = await resend(g);
               set({ lastOperation: { id: opId, state: out.state ?? "accepted" } });
-              watchOperation(opId);
+              watchOperation(opId, key);
               return true;
             } catch (e2) { err.code = (e2 as ApiError).code; err.message = (e2 as ApiError).message; }
           }
@@ -538,7 +583,7 @@ export const useStore = create<Store>((set, get) => {
           sessionGeneration: st.sessionGeneration, controlEpoch: grant?.epoch ?? 0, controlSecret: grant?.secret ?? "",
           command: { type: "prompt", text, delivery: "start", ...(images?.length ? { images } : {}) },
         }, opId);
-        watchOperation(opId);
+        watchOperation(opId, key);
         void get().loadCatalogue(key);
       } catch (e) { get().note(humaniseError((e as ApiError).message)); }
       return key;
@@ -558,6 +603,20 @@ export const useStore = create<Store>((set, get) => {
         await api.del(`/api/v1/workspaces/${encodeURIComponent(key)}`);
         await get().refreshSessions();
         toast.success(gone ? `${basename(gone.path)} removed from the allowlist (running sessions were not interrupted)` : "Removed from the allowlist (running sessions were not interrupted)");
+      } catch (e) { toast.error(humaniseError((e as ApiError).message)); }
+    },
+
+    /** Forget a session in pi-web (its file on disk is left alone; see DELETE /sessions/:key). */
+    deleteSession: async (key) => {
+      try {
+        const out = await api.del<{ note?: string; hiddenPath?: string | null }>(`/api/v1/sessions/${encodeURIComponent(key)}`);
+        sses.get(key)?.close();
+        sses.delete(key);
+        const views = { ...get().views };
+        delete views[key];
+        set({ views, hiddenCount: get().hiddenCount + (out?.hiddenPath ? 1 : 0), ...(get().activeKey === key ? { activeKey: null } : {}) });
+        await get().refreshSessions();
+        toast.success(out?.note ?? "Session removed from pi-web.");
       } catch (e) { toast.error(humaniseError((e as ApiError).message)); }
     },
 

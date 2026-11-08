@@ -76,6 +76,29 @@ function principal(req: FastifyRequest) {
   return ctx.principal;
 }
 
+/**
+ * Read fence for a session's file, with the reason a human can act on.
+ * A workspace removed from the allowlist used to leave its live browser-created sessions listed
+ * but every read answered with a bare 403 from the read worker ("workspace not allowed: w_x") -
+ * and a session whose file had since vanished answered 500 (BUG-014, BUG-025).
+ */
+function assertFileReadable(ctx: AppCtx, rec: SessionRec, why: string): void {
+  const p = rec.path;
+  if (!p) throw new ApiError("not_found", `no persisted file for this session yet (${why})`);
+  // A row can outlive its file (phantom from a failed boot, a session pi rotated away, or one the
+  // host has not written yet). The read worker answers raw ENOENT, which used to surface as a 500
+  // (BUG-025); say 404 with the path instead.
+  if (!fs.existsSync(p)) throw new ApiError("not_found", `the session file for this row does not exist right now (${p})`);
+  const roots = ctx.sessions.sessionRoots();
+  const inside = roots.some((r) => p === r || p.startsWith(r + "/"));
+  if (!inside) {
+    const ws = rec.meta.workspaceKey ? ctx.sessions.workspaces.get(rec.workspaceKey ?? "") : null;
+    throw new ApiError("forbidden", ws
+      ? `this session's workspace (${ws.path}) is outside the allowlisted session roots`
+      : `this session's workspace is no longer allowlisted, so its file is not readable here; re-add the folder to read it (the run itself was not interrupted)`);
+  }
+}
+
 function visible(sessions: Sessions, rec: SessionRec): boolean {
   if (rec.kind === "managed" || rec.kind === "bridged") return true;
   return rec.workspaceKey !== null;
@@ -317,6 +340,9 @@ export function registerRoutes(app: FastifyInstance, ctx: AppCtx) {
     let summaries = await ctx.read.call<{ meta: SessionMeta; diagnostics: number }[]>("list", {});
     // Allowlist by header cwd (never by encoded directory names).
     summaries = summaries.filter((s) => sessions.workspaceForCwd(s.meta.cwd ?? "") !== null);
+    // A deleted session's file is still on disk (pi-web never deletes it); the hidden list is what
+    // stops the row from coming back on the next refresh (BUG-015).
+    summaries = summaries.filter((s) => !sessions.isHidden(s.meta.path ?? null));
     const recs = summaries.map((s) => {
       const rec = sessions.ensureFromFileNoWatch(s.meta.path!);
       return { meta: { ...s.meta, sessionKey: rec.key, workspaceKey: rec.workspaceKey }, mode: sessions.mode(rec), state: rec.driver ? rec.state.phase : "unavailable" as const };
@@ -324,6 +350,7 @@ export function registerRoutes(app: FastifyInstance, ctx: AppCtx) {
     // Include live/managed/bridged sessions even without files.
     for (const rec of sessions.byKey.values()) {
       if (rec.path && recs.some((r) => r.meta.path === rec.path)) continue;
+      if (rec.path && sessions.isHidden(rec.path)) continue;
       if (!rec.path || recs.every((r) => r.meta.path !== rec.path)) {
         if (rec.driver || !rec.path) recs.push({ meta: { ...rec.meta, sessionKey: rec.key }, mode: sessions.mode(rec), state: rec.state.phase });
       }
@@ -366,23 +393,57 @@ export function registerRoutes(app: FastifyInstance, ctx: AppCtx) {
     return { meta: rec.meta, status: sessions.status(rec, control.state(rec.key, (req.headers["x-piweb-controller"] as string) ?? undefined)) };
   });
 
+  /**
+   * Forget a session in pi-web (SES-14 asked for this; there was no way to delete anything).
+   * The session *file* is pi's file and is never removed: it is marked hidden here so the row does
+   * not reappear on the next list, and `GET /api/v1/hidden-sessions` shows how to bring it back.
+   * A session a terminal pi still owns is refused: that pi is not ours to stop.
+   */
+  app.delete("/api/v1/sessions/:key", async (req) => {
+    principal(req);
+    const rec = recByKey(ctx, (req.params as { key: string }).key);
+    if (rec.driver && rec.kind === "bridged") {
+      throw new ApiError("read_only", "this session is owned by a running terminal pi; end it there (or /quit) and delete it again");
+    }
+    const { hidden } = sessions.retire(rec, "deleted");
+    return { ok: true, sessionKey: rec.key, fileRetained: Boolean(hidden), hiddenPath: hidden, note: hidden ? "The session file on disk was left untouched; pi-web will not list it again until you unhide it." : "This session had no file on disk; its row is gone." };
+  });
+
+  app.get("/api/v1/hidden-sessions", async (req) => {
+    principal(req);
+    return { sessions: sessions.hiddenList(), note: "deleted in pi-web, still on disk; DELETE /api/v1/hidden-sessions?path=<path> brings one back" };
+  });
+
+  app.delete("/api/v1/hidden-sessions", async (req) => {
+    principal(req);
+    const p = String((req.query as { path?: unknown } | undefined)?.path ?? "");
+    if (!p) throw new ApiError("invalid_request", "path query parameter required");
+    if (!sessions.unhide(p)) throw new ApiError("not_found", "no hidden session at that path");
+    return { ok: true, path: p, note: "it will be listed again on the next refresh" };
+  });
+
   app.get("/api/v1/sessions/:key/entries", async (req) => {
     principal(req);
     const rec = recByKey(ctx, (req.params as { key: string }).key);
     const q = query<{ cursor?: string; limit?: number; branch?: string; before?: string }>(req, EntriesQuerySchema);
-    if (!rec.path) throw new ApiError("not_found", "no persisted file for this session yet");
-    if (rec.workspaceKey === null && !rec.driver) throw new ApiError("forbidden", "session outside allowlisted roots");
+    assertFileReadable(ctx, rec, "entries");
     await ctx.read.ensure(sessions.sessionRoots());
     try {
       if (q.before != null) {
         return await ctx.read.call<EntryPage & { nextCursor: string | null; olderCursor?: string | null }>("pageBefore", {
-          file: rec.path, before: q.before, limit: q.limit ?? ENTRIES_PAGE_DEFAULT,
+          file: rec.path!, before: q.before, limit: q.limit ?? ENTRIES_PAGE_DEFAULT,
         });
       }
-      const page = await ctx.read.call<EntryPage & { nextCursor: string | null }>("page", { file: rec.path, cursor: q.cursor ?? null, limit: q.limit ?? ENTRIES_PAGE_DEFAULT });
+      const page = await ctx.read.call<EntryPage & { nextCursor: string | null }>("page", { file: rec.path!, cursor: q.cursor ?? null, limit: q.limit ?? ENTRIES_PAGE_DEFAULT });
       return page;
     } catch (e) {
       if ((e as { code?: string }).code === "cursor_expired") throw new ApiError("cursor_expired", "page cursor expired; refetch from a fresh snapshot");
+      if ((e as { code?: string }).code === "ENOENT" || (e as { code?: string }).code === "not_found") {
+        throw new ApiError("not_found", `the session file for this row no longer exists (${rec.path})`);
+      }
+      // The row outlived its file (a phantom from a failed boot, or a session pi rotated away):
+      // that is a 404 with a reason, not a 500 (BUG-025).
+      if (!fs.existsSync(rec.path!)) throw new ApiError("not_found", `the session file for this row no longer exists (${rec.path})`);
       throw e;
     }
   });
@@ -391,6 +452,7 @@ export function registerRoutes(app: FastifyInstance, ctx: AppCtx) {
     principal(req);
     const rec = recByKey(ctx, (req.params as { key: string }).key);
     if (!rec.path) throw new ApiError("not_found", "no persisted file");
+    assertFileReadable(ctx, rec, "entry");
     await ctx.read.ensure(sessions.sessionRoots());
     const entry = await ctx.read.call<EntryView | null>("entry", { file: rec.path, entryId: (req.params as { key: string; entryId: string }).entryId });
     if (!entry) throw new ApiError("not_found", "entry not found");
@@ -405,6 +467,7 @@ export function registerRoutes(app: FastifyInstance, ctx: AppCtx) {
       try { return await rec.driver.cmd("tree", {}, 10_000); } catch (e) { logWarn("owner_tree_failed", { err: String((e as Error).message).slice(0, 80) }); }
     }
     if (!rec.path) throw new ApiError("not_found", "no tree source");
+    assertFileReadable(ctx, rec, "tree");
     await ctx.read.ensure(sessions.sessionRoots());
     return ctx.read.call("tree", { file: rec.path });
   });
@@ -417,6 +480,7 @@ export function registerRoutes(app: FastifyInstance, ctx: AppCtx) {
       try { return await rec.driver.cmd("context", {}, 10_000); } catch { /* fall back to persisted projection */ }
     }
     if (!rec.path) throw new ApiError("not_found", "no persisted file");
+    assertFileReadable(ctx, rec, "context");
     await ctx.read.ensure(sessions.sessionRoots());
     return ctx.read.call("context", { file: rec.path });
   });
@@ -425,6 +489,7 @@ export function registerRoutes(app: FastifyInstance, ctx: AppCtx) {
     principal(req);
     const rec = recByKey(ctx, (req.params as { key: string }).key);
     if (!rec.path) throw new ApiError("not_found", "no persisted file");
+    assertFileReadable(ctx, rec, "stats");
     await ctx.read.ensure(sessions.sessionRoots());
     const stats = await ctx.read.call<Record<string, unknown>>("stats", { file: rec.path });
     return { ...stats, runtimeUsage: rec.driver ? { note: "runtime usage available via live snapshot", contextUsage: rec.state.contextUsage } : null };
@@ -434,7 +499,7 @@ export function registerRoutes(app: FastifyInstance, ctx: AppCtx) {
     principal(req);
     const rec = recByKey(ctx, (req.params as { key: string }).key);
     if (!rec.path) throw new ApiError("not_found", "no file");
-    if (rec.workspaceKey === null && !rec.driver) throw new ApiError("forbidden", "session outside allowlisted roots");
+    assertFileReadable(ctx, rec, "raw");
     await ctx.read.ensure(sessions.sessionRoots());
     const q = query<{ offset?: number; limit?: number }>(req, RawQuerySchema);
     let offset = q.offset ?? 0;
@@ -448,11 +513,20 @@ export function registerRoutes(app: FastifyInstance, ctx: AppCtx) {
       }
     }
     const out = await ctx.read.call<{ base64: string; offset: number; size: number }>("raw", { file: rec.path, offset, limit });
+    const body = Buffer.from(out.base64, "base64");
+    const total = Number(out.size ?? body.length);
     reply.header("content-type", "application/x-ndjson");
     reply.header("accept-ranges", "bytes");
     reply.header("content-disposition", `attachment; filename="session-${rec.key.slice(2, 10)}.jsonl"`);
-    reply.code(206);
-    return Buffer.from(out.base64, "base64");
+    // Say out loud when the body is only part of the file: handing a truncated session log over as
+    // if it were complete is silent data loss for anyone archiving sessions by download (BUG-005).
+    if (body.length < total || offset > 0) {
+      reply.header("content-range", `bytes ${offset}-${offset + body.length - 1}/${total}`);
+      reply.code(206);
+    } else {
+      reply.code(200);
+    }
+    return body;
   });
 
   app.get("/api/v1/sessions/:key/models", async (req) => {
@@ -644,12 +718,24 @@ async function createManagedSession(ctx: AppCtx, ws: WorkspaceInfo, input: { mod
         .run(rec.key, handle.sessionFile, "managed", ws.workspaceKey, rec.createdAt, new Date().toISOString(), "browser");
     }
     if (handle.runtimeId !== "pending") rec.driver!.runtimeId = handle.runtimeId;
+    // Boot-time runtime facts: a managed session has no file until its first run, so these are the
+    // only source for "which model is this?" before then (BUG-007).
+    if (handle.helloModel && !rec.state.model) rec.state.model = handle.helloModel;
+    if (handle.helloThinkingLevel != null && !rec.state.thinkingLevel) rec.state.thinkingLevel = handle.helloThinkingLevel;
+    if (handle.helloSessionName && !rec.state.sessionName) { rec.state.sessionName = handle.helloSessionName; rec.meta.name = handle.helloSessionName; }
     sessions.attach(rec);
+    ctx.hub.emit(rec.key, "runtimeState", sessions.runtimePayload(rec));
     hub_emitOwnerChanged(ctx, rec);
   }).catch((e) => {
-    logWarn("managed_boot_failed", { err: String((e as Error).message).slice(0, 120) });
+    logWarn("managed_boot_failed", { err: String((e as Error).message).slice(0, 200) });
     rec.driver = null;
     rec.state.phase = "unknown";
+    if (!rec.path) {
+      // Nothing to show and nothing on disk: do not leave a phantom "history / no file" row behind
+      // forever (BUG-002's second symptom). The client learns via the hostExited + resync frames.
+      sessions.retire(rec, "boot-failed");
+      return;
+    }
     sessions.attach(rec);
     ctx.hub.emit(rec.key, "hostExited", { reason: "lost", exitCode: null, signal: null });
   });

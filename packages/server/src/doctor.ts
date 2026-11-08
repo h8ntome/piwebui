@@ -72,8 +72,14 @@ export async function collectDoctor(dataDir: string): Promise<DoctorReport> {
     const fileMode = modeOf(file);
     checks.push(fileMode === 0o600 ? ok("descriptor.mode", `${file} is 0600 (owner-only, as it must be)`)
       : fail("descriptor.mode", `${file} is ${(fileMode).toString(8)}, not 0600: the bridge token is readable`, `chmod 600 ${file}`));
-    checks.push(dirMode === 0o700 || dirMode === 0o755 || dirMode === 0o700 ? ok("datadir.mode", `${dataDir} mode ${(dirMode).toString(8)}`)
-      : warn("datadir.mode", `${dataDir} mode ${(dirMode).toString(8)}; 0700 is recommended`, `chmod 700 ${dataDir}`));
+    // (this clause used to read `0o700 || 0o755 || 0o700`, i.e. a duplicated test that waved a
+    // world-readable data dir through while metadata.db sat inside it at 0644 — BUG-022).
+    const dbMode = modeOf(path.join(dataDir, "metadata.db"));
+    checks.push(dirMode === 0o700 ? ok("datadir.mode", `${dataDir} is 0700 (owner-only, as it must be)`)
+      : warn("datadir.mode", `${dataDir} mode ${(dirMode).toString(8)}, not 0700: anyone on this machine who can reach the port can also read this state`, `chmod 700 ${dataDir}`));
+    if (dbMode >= 0 && dbMode !== 0o600) {
+      checks.push(warn("db.mode", `${path.join(dataDir, "metadata.db")} mode ${(dbMode).toString(8)}, not 0600`, `chmod 600 ${path.join(dataDir, "metadata.db")}`));
+    }
     checks.push(fs.existsSync(d.socket) ? ok("socket", `bridge socket present: ${d.socket}`)
       : fail("socket", `descriptor points at ${d.socket}, which does not exist: pi-web is not running (or died without cleaning up)`, "start pi-web; bridges reconnect within 15 s"));
     checks.push(pidAlive(d.pid) ? ok("server.pid", `pid ${d.pid} from the descriptor is alive (server ${d.serverId})`)

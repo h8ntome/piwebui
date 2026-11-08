@@ -685,6 +685,11 @@ async function main() {
     hello: {
       protocol: 1, runtimeId, pid: process.pid, procStart: Math.floor(performance.timeOrigin),
       piVersion, cwd: init.cwd, sessionFile: session.sessionFile ?? null, sessionId: session.sessionId ?? null,
+      // The runtime's own model/thinking/level, from boot. A browser-created session has no file
+      // until its first run, so there is no `model_change` entry to read yet, and a session created
+      // with an explicit model used to show "Select model" / "Model —" until that first run
+      // finished (BUG-007).
+      model: modelRef(session.model), thinkingLevel: session.thinkingLevel ?? null, sessionName: session.sessionName ?? null,
       mode: "managed", capabilities: caps(), startedAt,
     },
   });

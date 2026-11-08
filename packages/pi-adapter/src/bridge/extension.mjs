@@ -49,6 +49,12 @@ export default function piWebBridge(pi) {
   const previewOrder = [];
   const MAX_PREVIEWS = 4;
   const MAX_PREVIEW_BYTES = 2 * 1024 * 1024;
+  // pi hands a *new* message object per streamed chunk, so object identity (or a stamp written on
+  // it) mints a fresh preview for every token: rows duplicated in the browser, forever "working",
+  // replayed on every reconnect, and the map grew without bound. Trackers are keyed by their own id
+  // and re-associated to the arriving object positionally (last open tracker of that role), exactly
+  // like the managed host does.
+  const objToTracker = new WeakMap();
   const tools = new Map(); // toolCallId -> state
   const observedDialogs = []; // {requestId, kind, title, startedAt, endedAt}
   let dialogSeq = 0;
@@ -84,15 +90,41 @@ export default function piWebBridge(pi) {
 
   function touch() { stateRevision++; }
 
-  function previewOf(msg, role) {
-    let p = previews.get(msg.__pwId);
-    if (!p) {
-      p = { msg, liveMessageId: msg.__pwId, role, rev: 0, blocks: [], done: false, startedAt: new Date().toISOString(), bytes: 0 };
-      previews.set(msg.__pwId, p);
-      previewOrder.push(msg.__pwId);
-      while (previewOrder.length > MAX_PREVIEWS) previews.delete(previewOrder.shift());
+  let idSeq = 0;
+  function newTracker(msg, role) {
+    const p = { msg, liveMessageId: `lm-${Date.now().toString(36)}-${++idSeq}`, role, rev: 0, blocks: [], done: false, startedAt: new Date().toISOString(), bytes: 0 };
+    previews.set(p.liveMessageId, p);
+    previewOrder.push(p.liveMessageId);
+    while (previewOrder.length > MAX_PREVIEWS) {
+      const dropId = previewOrder.shift();
+      if (dropId === p.liveMessageId) { previewOrder.push(dropId); continue; }
+      const drop = previews.get(dropId);
+      if (drop && !drop.done) { drop.done = true; broadcast("message_end", { liveMessageId: drop.liveMessageId, preview: snapshotPreview(drop) }); }
+      previews.delete(dropId);
     }
+    try { objToTracker.set(msg, p); } catch { /* non-object message */ }
     return p;
+  }
+
+  /** Find (or create) the tracker for this message object: identity first, then stream position. */
+  function trackerFor(msg, role, { create = true } = {}) {
+    const byObj = objToTracker.get(msg);
+    if (byObj && previews.has(byObj.liveMessageId)) { byObj.msg = msg; return byObj; }
+    const open = [...previewOrder].reverse().map((id) => previews.get(id)).find((p) => p && !p.done && p.role === role);
+    if (open) { open.msg = msg; try { objToTracker.set(msg, open); } catch { /* non-object */ } return open; }
+    if (!create) return null;
+    return newTracker(msg, role);
+  }
+
+  /** Close every preview still streaming; a turn or agent settle means nothing more can arrive. */
+  function closeOpenPreviews(role) {
+    for (const id of [...previewOrder]) {
+      const p = previews.get(id);
+      if (!p || p.done || (role && p.role !== role)) continue;
+      p.done = true;
+      p.rev++;
+      broadcast("message_end", { liveMessageId: p.liveMessageId, preview: snapshotPreview(p) });
+    }
   }
 
   function snapshotPreview(p) {
@@ -487,43 +519,43 @@ export default function piWebBridge(pi) {
   on("agent_start", () => { touch(); broadcast("agent_start", {}); });
   on("agent_settled", (e) => {
     lastSettled = { at: new Date().toISOString(), aborted: !!e.aborted };
+    closeOpenPreviews(); // nothing can still be streaming once the agent has settled
     touch();
     broadcast("agent_settled", { aborted: !!e.aborted });
   });
 
-  let idSeq = 0;
   on("message_start", (e) => {
     const msg = e.message;
-    if (!msg.__pwId) msg.__pwId = `lm-${Date.now().toString(36)}-${++idSeq}`;
     const role = msg.role === "user" ? "user" : "assistant";
-    previewOf(msg, role);
+    const p = trackerFor(msg, role);
     touch();
-    broadcast("message_start", { liveMessageId: msg.__pwId, role });
+    broadcast("message_start", { liveMessageId: p.liveMessageId, role });
   });
   on("message_update", (e) => {
     const msg = e.message;
-    if (!msg.__pwId) msg.__pwId = `lm-${Date.now().toString(36)}-${++idSeq}`;
-    const p = previewOf(msg, msg.role === "user" ? "user" : "assistant");
+    const p = trackerFor(msg, msg.role === "user" ? "user" : "assistant");
     p.rev++;
     throttledPreview(p);
   });
   on("message_end", (e) => {
     const msg = e.message;
-    if (msg.__pwId) {
-      const p = previews.get(msg.__pwId);
-      if (p) { p.done = true; p.rev++; broadcast("message_end", { liveMessageId: p.liveMessageId, preview: snapshotPreview(p) }); }
-    }
+    const p = trackerFor(msg, msg.role === "user" ? "user" : "assistant", { create: false });
+    if (p) { p.done = true; p.rev++; broadcast("message_end", { liveMessageId: p.liveMessageId, preview: snapshotPreview(p) }); }
     touch();
   });
   on("turn_end", (e) => {
     const msg = e.message;
     let liveMessageId;
-    if (msg?.__pwId && previews.has(msg.__pwId)) {
-      liveMessageId = msg.__pwId;
-      const p = previews.get(msg.__pwId);
-      p.mappedEntryId = e.messageEntryId;
+    const p = trackerFor(msg, msg?.role === "user" ? "user" : "assistant", { create: false });
+    if (p) {
+      liveMessageId = p.liveMessageId;
+      if (e.messageEntryId) p.mappedEntryId = e.messageEntryId;
       p.done = true;
     }
+    // Any assistant preview this turn left open is finished business, not a live stream: leaving
+    // them open is what duplicated transcript rows and stuck the "working" shimmer on a bridged
+    // session (BUG-004).
+    closeOpenPreviews("assistant");
     touch();
     broadcast("turn_end", {
       messageEntryId: e.messageEntryId ?? null,

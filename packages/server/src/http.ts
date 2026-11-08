@@ -72,7 +72,16 @@ export function buildServer(cfg: Config, auth: AuthService): FastifyInstance {
       const bearer = req.headers.authorization?.startsWith("Bearer ") ? req.headers.authorization.slice(7) : null;
       const web = cookies[COOKIE_NAME] ? auth.webSessionByCookie(cookies[COOKIE_NAME]) : null;
       if (web) { principal = web.principal; csrfCheck = web.csrfOk; }
-      else if (bearer) { const p = auth.principalFromBearer(bearer); if (p) principal = p; }
+      else if (bearer) {
+        const p = auth.principalFromBearer(bearer);
+        if (p) principal = p;
+        else {
+          // A token that is not recognised is refused, never quietly downgraded: silently serving
+          // the anonymous view made a typo'd or revoked token look like it still worked (BUG-012).
+          reply.code(401).send({ error: { code: "unauthorized", message: "bearer token is unknown or has been revoked", retryable: false } });
+          return;
+        }
+      }
       if (!principal) {
         const issued = auth.createWebSession();
         principal = issued.principal;

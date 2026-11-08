@@ -7,6 +7,7 @@ import { FloatingMenu, MenuTrigger, type MenuItem } from "../ui/Menu";
 import { Tip } from "../ui/Tooltip";
 import { ConfirmDialog } from "../ui/Dialog";
 import { basename, relTime, oneLine, copyText, timeFull } from "../lib/format";
+import { downloadSessionLog } from "../lib/api";
 import { modeLabel } from "../lib/labels";
 import { toast } from "../ui/Toast";
 
@@ -386,7 +387,20 @@ function SessionMenu({ s, onRename, onAbort }: { s: SessionListItem; onRename: (
         if (v?.status?.mode === "managed" && caps.stopForTerminal) items.push({ kind: "item", label: "Return to terminal", icon: "right-up-outline", onSelect: () => { close(); setConfirmCmd({ title: "Return this run to a terminal?", body: "The current run is stopped so the same session can be resumed from a terminal pi.", run: () => void command({ type: "stopForTerminal", mode: "settle" }, s.meta.sessionKey) }); } });
         if (caps.abort) items.push({ kind: "item", label: "Stop run", icon: "stop-fill", danger: true, onSelect: () => { onAbort(s.meta.sessionKey); close(); } });
         if (s.meta.path) items.push({ kind: "item", label: "Copy session path", icon: "copy-outline", onSelect: () => { void copyText(s.meta.path!).then((ok) => ok ? toast.success("Copied") : toast.error("Could not copy.")); close(); } });
-        if (s.meta.path) items.push({ kind: "item", label: "Download log", icon: "download-outline", onSelect: () => { window.open(`/api/v1/sessions/${encodeURIComponent(s.meta.sessionKey)}/raw`, "_blank"); close(); } });
+        if (s.meta.path) items.push({ kind: "item", label: "Download log", icon: "download-outline", onSelect: () => {
+          close();
+          void downloadSessionLog(s.meta.sessionKey, `pi-session-${(s.meta.piSessionId ?? s.meta.sessionKey ?? "session").slice(0, 24)}.jsonl`)
+            .then((r) => { if (r.truncated) toast.error("Saved part of the log: the server sent fewer bytes than the file holds."); })
+            .catch(() => toast.error("Could not download this session log."));
+        } });
+        items.push({ kind: "item", label: "Delete from pi-web…", icon: "trash-outline", danger: true, onSelect: () => {
+          close();
+          setConfirmCmd({
+            title: "Remove this session from pi-web?",
+            body: "The session file on disk is pi's and is never deleted: pi-web just stops listing this row. You can bring it back with `pi-web hidden` / `pi-web unhide <path>`.",
+            run: () => void useStore.getState().deleteSession(s.meta.sessionKey),
+          });
+        } });
         if (!items.length) items.push({ kind: "item", label: "Read-only session", disabled: true, onSelect: () => undefined });
         return items;
       }}

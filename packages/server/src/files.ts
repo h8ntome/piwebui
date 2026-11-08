@@ -29,13 +29,21 @@ export function denylistHit(workspace: string, rel: string): boolean {
 /** Resolve each path component step-by-step, refusing symlinks that escape the root. */
 export async function containedResolve(root: string, relPath: string): Promise<string> {
   const rootReal = await fsp.realpath(root);
+  // An absolute path is not "the same path inside the workspace": silently re-basing it used to
+  // answer `?path=/etc/passwd` with the workspace root listing, i.e. a 200 for a question nobody
+  // asked (BUG-006). Refuse it and say why.
+  if (path.isAbsolute(relPath) || relPath.startsWith("~")) {
+    throw new ApiError("invalid_request", `path must be relative to the workspace root, not absolute (${relPath})`);
+  }
   let cur = rootReal;
   const parts = relPath.split(/[\\/]+/).filter((p) => p !== "" && p !== ".");
   for (const part of parts) {
     if (part === "..") throw new ApiError("forbidden", "path traversal denied");
     const next = path.join(cur, part);
     const lstat = await fsp.lstat(next).catch(() => null);
-    if (!lstat) break; // leaf may not exist yet; final check below
+    // A missing component is a missing path. Falling through to the root here is what turned
+    // "file gone" into "file is a folder" (BUG-006, reason `missing`).
+    if (!lstat) throw new ApiError("not_found", `no such file or directory: ${relPath}`, "missing");
     if (lstat.isSymbolicLink()) {
       const targetReal = await fsp.realpath(next).catch(() => null);
       if (!targetReal) throw new ApiError("forbidden", "dangling symlink");

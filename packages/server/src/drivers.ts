@@ -10,7 +10,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { fork, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { DISPATCH_ACK_TIMEOUT_MS, HEALTH_MAX_MISSES, HEALTH_PING_MS, MAX_RECORD_BYTES, type Capabilities } from "@piwebui/shared";
+import { DISPATCH_ACK_TIMEOUT_MS, HEALTH_MAX_MISSES, HEALTH_PING_MS, MAX_RECORD_BYTES, type Capabilities, type RuntimeIdentity } from "@piwebui/shared";
 import { logInfo, logWarn } from "./log.ts";
 import { resolveAdapterScript } from "./adapterPaths.ts";
 import { LfFramer, decodeRecord } from "@piwebui/pi-adapter/tail";
@@ -305,12 +305,22 @@ export class ManagedHandle implements Driver {
   private missedPongs = 0;
   ready: Promise<void>;
   intentionalExit = false;
+  /** Boot-time runtime facts from the host handshake (model/thinking are otherwise unknown until the first run). */
+  helloModel: RuntimeIdentity["model"] | null = null;
+  helloThinkingLevel: string | null = null;
+  helloSessionName: string | null = null;
 
   constructor(private child: ChildProcess, gen: number, initArgs: Record<string, unknown>) {
     this.generation = gen;
     this.initArgs = initArgs;
     this.cwd = (initArgs.cwd as string) ?? null;
     this.child.on("message", (msg: any) => this.onMessage(msg));
+    // Without this listener an IPC error after disconnect ("Channel closed") is thrown as an
+    // unhandled 'error' event and takes the whole server down.
+    this.child.on("error", (e) => {
+      logWarn("managed_host_error", { runtime: this.runtimeId, err: String((e as Error).message).slice(0, 160) });
+      this.die(this.dead ? "disposed" : "lost", null, null);
+    });
     this.child.on("exit", (code, signal) => {
       this.die(this.intentionalExit ? "disposed" : "exited", code, signal);
     });
@@ -363,6 +373,11 @@ export class ManagedHandle implements Driver {
       this.piVersion = String(hi.piVersion ?? "unknown");
       this.sessionFile = hi.sessionFile ?? null;
       this.capabilities = (hi.capabilities ?? {}) as Capabilities;
+      // What the runtime already knows at boot; a managed session has no file (and so no
+      // model_change entry) until its first run (BUG-007).
+      this.helloModel = (hi.model ?? null) as RuntimeIdentity["model"] | null;
+      this.helloThinkingLevel = hi.thinkingLevel == null ? null : String(hi.thinkingLevel);
+      this.helloSessionName = hi.sessionName == null ? null : String(hi.sessionName);
       this.startHealth();
       this.bootResolve?.();
       return;

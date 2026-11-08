@@ -1,5 +1,5 @@
 /** Folder picker: browses real server-side directories through /api/v1/browse. */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Dialog } from "../ui/Dialog";
 import { Icon } from "../lib/icons";
 import { useStore, type BrowseResult } from "../lib/store";
@@ -23,36 +23,50 @@ export function DirectoryPicker({ initialPath, title = "Select Workspace Directo
   const go = useCallback(async (p: string) => {
     const out = await browse(p);
     // A failed browse keeps the typed path and the field open, so a typo is fixable in place
-    // instead of being thrown away (WS-02).
-    if (!out) { setPathError(`“${p || "home"}” could not be opened.`); return; }
+    // instead of being thrown away (WS-02). The caller decides when to close the field.
+    if (!out) { setPathError(`“${p || "home"}” could not be opened.`); return false; }
     setPathError(null);
     setData(out);
     setSelected(null);
     setPathDraft(out.path);
+    return true;
   }, [browse]);
 
   useEffect(() => { void go(initialPath || ""); }, [go, initialPath]);
 
   const entries = (data?.entries ?? []).filter((e) => e.kind === "dir" && (showHidden || !e.name.startsWith(".")));
-  // One home crumb, then the path below it: the old render showed "Home / ~" for the same
-  // directory twice and unlabelled segments.
-  const rel = data ? (data.path === data.home ? "" : data.path.startsWith(data.home + "/") ? data.path.slice(data.home.length + 1) : data.path.replace(/^\/+/, "")) : "";
-  const segs = rel ? rel.split("/").filter(Boolean) : [];
+  // Breadcrumbs are the *absolute* path walked one segment at a time. Joining them onto `home`
+  // (as this used to) made every folder outside $HOME unreachable: clicking `ws` in
+  // /tmp/audit/ws/x tried to open /home/dev/tmp/audit/ws (BUG-010).
+  const crumbs = useMemo(() => {
+    if (!data) return [] as { label: string; path: string }[];
+    if (data.path === data.home) return [];
+    const underHome = data.path.startsWith(data.home === "/" ? "/" : data.home + "/");
+    const base = underHome ? data.home : data.path.startsWith("/") ? "" : ".";
+    const rest = underHome ? data.path.slice(base.length) : data.path;
+    let acc = base;
+    return rest.split("/").filter(Boolean).map((label) => {
+      if (acc === "" || acc === ".") acc = data.path.startsWith("/") ? "/" + label : label;
+      else acc = acc.endsWith("/") ? acc + label : `${acc}/${label}`;
+      return { label, path: acc };
+    });
+  }, [data]);
 
   const jumpTo = (index: number) => {
     if (!data) return;
-    if (index < 0) { void go(data.home); return; }
-    const target = segs.slice(0, index + 1).join("/");
-    void go(`${data.home === "/" ? "" : data.home}/${target}`);
+    const crumb = crumbs[index];
+    void go(crumb ? crumb.path : data.home);
   };
 
   const chosen = selected ?? data?.path ?? null;
 
-  const submitDraft = () => {
+  const submitDraft = async () => {
     const p = pathDraft.trim();
     if (!p) { setEditing(false); return; }
-    void go(p);
-    setEditing(false);
+    // Only close the field once the path actually opened; on failure it stays mounted with the
+    // text intact, which is what the comment in `go` promises (BUG-011).
+    const opened = await go(p);
+    if (opened) setEditing(false);
   };
 
   return (
@@ -81,18 +95,18 @@ export function DirectoryPicker({ initialPath, title = "Select Workspace Directo
                 value={pathDraft}
                 autoFocus
                 onChange={(e) => { setPathDraft(e.target.value); setPathError(null); }}
-                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); submitDraft(); } if (e.key === "Escape") { setEditing(false); setPathError(null); } }}
+                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void submitDraft(); } if (e.key === "Escape") { setEditing(false); setPathError(null); } }}
               />
-              <button className="pw-btn pw-btn--sm pw-btn--primary" onClick={submitDraft}>Go</button>
+              <button className="pw-btn pw-btn--sm pw-btn--primary" onClick={() => void submitDraft()}>Go</button>
               <button className="pw-btn pw-btn--sm pw-btn--ghost" onClick={() => { setEditing(false); setPathError(null); if (data) setPathDraft(data.path); }}>Cancel</button>
             </>
           ) : (
             <>
               <button onClick={() => data && void go(data.home)} title="Home directory" aria-label="Go to home directory">Home</button>
-              {segs.map((s, i) => (
-                <span key={i} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+              {crumbs.map((c, i) => (
+                <span key={c.path} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
                   <span style={{ color: "var(--dsw-alias-label-caption)" }}>/</span>
-                  <button onClick={() => jumpTo(i)}>{s}</button>
+                  <button onClick={() => jumpTo(i)}>{c.label}</button>
                 </span>
               ))}
               <button className="pw-iconBtn" style={{ marginLeft: "auto" }} aria-label="Type a path" title="Type a path" onClick={() => { setEditing(true); setPathDraft(data?.path ?? ""); }}><Icon name="edit-outline" size={13} /></button>

@@ -4,7 +4,7 @@
  * Uses node:sqlite (built-in since Node 22.5) so there is no native module to build.
  */
 import { DatabaseSync } from "node:sqlite";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, chmodSync } from "node:fs";
 import path from "node:path";
 
 /** One row of the `runtimes` table: an attested bridge runtime and its trust state. */
@@ -30,7 +30,14 @@ export class Store {
   db: DatabaseSync;
   constructor(file: string) {
     mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+    // The directory mode is the only thing standing between another user and this SQLite file, and
+    // mkdir's mode is silently masked by umask (and not applied at all to a directory that already
+    // existed) - so set both explicitly instead of hoping (BUG-022).
+    try { chmodSync(path.dirname(file), 0o700); } catch { /* best effort */ }
     this.db = new DatabaseSync(file);
+    for (const suffix of ["", "-shm", "-wal"]) {
+      try { chmodSync(file + suffix, 0o600); } catch { /* file may not exist yet */ }
+    }
     this.db.exec("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON;");
     this.migrate();
   }
@@ -41,6 +48,9 @@ export class Store {
     CREATE TABLE IF NOT EXISTS sessions(key TEXT PRIMARY KEY, path TEXT UNIQUE, kind TEXT NOT NULL, workspace_key TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, origin TEXT NOT NULL, note TEXT);
     CREATE TABLE IF NOT EXISTS file_claims(path TEXT PRIMARY KEY, owner_kind TEXT NOT NULL, owner_id TEXT NOT NULL, generation INTEGER NOT NULL, acquired_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS control_grants(session_key TEXT PRIMARY KEY, controller_id TEXT NOT NULL, epoch INTEGER NOT NULL, secret_hash TEXT NOT NULL, expires_at INTEGER NOT NULL);
+    /** Sessions the user deleted. pi-web never deletes session *files*, so without this a deleted
+     * file-backed row would simply be rediscovered on the next list (BUG-015). */
+    CREATE TABLE IF NOT EXISTS hidden_sessions(path TEXT PRIMARY KEY, session_key TEXT, name TEXT, hidden_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS operations(
       id TEXT PRIMARY KEY, principal TEXT NOT NULL, session_key TEXT NOT NULL, runtime_gen INTEGER NOT NULL,
       idem_key TEXT NOT NULL, payload_hash TEXT NOT NULL, kind TEXT NOT NULL, state TEXT NOT NULL,

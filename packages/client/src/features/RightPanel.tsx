@@ -1,7 +1,7 @@
 /** Right-hand panel: session info, workspace files, entry tree and context usage.
     Every tile and row renders live data from the pi-web API. */
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { api } from "../lib/api";
+import { api, downloadSessionLog } from "../lib/api";
 import { useStore, type FileView, type SessionView } from "../lib/store";
 import { useSettings, useUi, type PanelTab } from "../lib/settings";
 import { Icon } from "../lib/icons";
@@ -22,6 +22,7 @@ function KV({ rows }: { rows: [string, React.ReactNode][] }) {
 function SessionTab({ v, keyName }: { v: SessionView; keyName: string }) {
   const st = v.status;
   const caps = st?.capabilities ?? {};
+  const metaPath = v.meta?.path ?? null;
   return (
     <>
       {/* One placeholder vocabulary, translated enums (PNL-04 / GEN-05). */}
@@ -37,13 +38,28 @@ function SessionTab({ v, keyName }: { v: SessionView; keyName: string }) {
         ["Thinking", v.runtime?.thinkingLevel ?? "off"],
       ]} />
       <div style={{ marginTop: 20, display: "flex", gap: 8, flexWrap: "wrap" }}>
-        {v.meta?.path && (
-          <a className="pw-btn pw-btn--sm pw-btn--outline" href={`/api/v1/sessions/${encodeURIComponent(keyName)}/raw`}
-            download={`pi-session-${(v.meta.piSessionId ?? keyName ?? "session").slice(0, 24)}.jsonl`}
-            title={`${bytes(v.meta.sizeBytes) || "session log"} — downloads as a file, not a browser page`}
-            style={{ textDecoration: "none" }}>
-            <Icon name="download-outline" size={13} /> Session log{v.meta.sizeBytes ? ` (${bytes(v.meta.sizeBytes)})` : ""}
-          </a>
+        {metaPath && (
+          <button
+            className="pw-btn pw-btn--sm pw-btn--outline"
+            onClick={() => {
+              void downloadSessionLog(keyName, `pi-session-${(v.meta?.piSessionId ?? keyName ?? "session").slice(0, 24)}.jsonl`)
+                .then((r) => { if (r.truncated) toast.error("Saved part of the log: the server sent fewer bytes than the file holds."); })
+                .catch(() => toast.error("Could not download this session log."));
+            }}
+            title={`${bytes(v.meta?.sizeBytes) || "session log"} — downloads the whole file, not a browser page`}
+          >
+            <Icon name="download-outline" size={13} /> Session log{v.meta?.sizeBytes ? ` (${bytes(v.meta.sizeBytes)})` : ""}
+          </button>
+        )}
+        {/* README promises this handoff; the path alone made the user build the command (BUG-013). */}
+        {metaPath && (
+          <button
+            className="pw-btn pw-btn--sm pw-btn--outline"
+            onClick={() => { void copyText(`pi --session ${metaPath}`).then((ok) => ok ? toast.success("Copied: pi --session <path>") : toast.error("Could not copy.")); }}
+            title={`pi --session ${metaPath}`}
+          >
+            <Icon name="copy-outline" size={13} /> Continue in terminal
+          </button>
         )}
       </div>
       {st?.compat && !st.compat.tested && <div className="pw-indicator pw-indicator--warning" style={{ marginTop: 16 }}><Icon name="warning-outline" size={13} /> adapter untested</div>}
