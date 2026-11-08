@@ -20,10 +20,12 @@
  * `--expect-version` is the assertion that the *tag* actually moved: publishing a version
  * and pointing `latest` at it are two things that can fail independently.
  *
- * `--settle <seconds>` polls for up to that long before giving up: npm's read replica
- * lags the write by minutes after a publish, so a verify run fired straight after
- * `npm publish` must not treat the first `404` — or a dist-tag that still resolves to the
- * previous version — as the truth.
+ * `--settle <seconds>` is one deadline shared by every lag wait, not a per-phase budget. npm's
+ * read replica lags the write by minutes, and it lags *per package*: the released version may be
+ * invisible (404), a dist-tag may still resolve to the previous version, and the packument of an
+ * internal `@piwebui/*` dependency pinned to that same version may be so stale that
+ * `npm install -g` fails ETARGET on a package that exists. All three are waited out; a verify run
+ * fired straight after `npm publish` must not treat any of them as the truth.
  *
  * `check-cli-names.mts` proves the repository is self-consistent; it cannot see the
  * artifact already on the registry. This script closes that gap, because the reported
@@ -79,6 +81,25 @@ const LAGGED = /ETARGET|E404|NO MATCH FOUND|NOT FOUND|404/i;
 /** True while the registry could still legitimately come good on this version. */
 const mayStillBeLagging = (out: string) => LAGGED.test(out) && Date.now() < lagDeadline;
 
+/**
+ * Poll the registry until `name@version` resolves, or the settle budget runs out.
+ *
+ * Needed because a freshly published version becomes visible per package, not per release: the
+ * server's own manifest shows up while the packument of the `@piwebui/shared` it pins to the same
+ * canary version is still the pre-publish one, and then `npm install -g` fails with ETARGET on a
+ * dependency that exists. The version lookup in step 1 says nothing about that.
+ */
+const waitForVersion = async (target: string, why: string) => {
+  let r = npm(["view", target, "version", "--json"]);
+  while (r.status !== 0 && Date.now() < lagDeadline) {
+    const step = 15_000;
+    console.log(`   ${target} not resolvable yet (${why}); retrying in ${step / 1000}s`);
+    await sleep(step);
+    r = npm(["view", target, "version", "--json"]);
+  }
+  return r.status === 0;
+};
+
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "piweb-verify-"));
 process.on("exit", () => fs.rmSync(tmp, { recursive: true, force: true }));
 
@@ -89,7 +110,7 @@ console.log(`verifying ${pkgName} ${label} from ${process.env.npm_config_registr
 // published seconds ago is routinely invisible for minutes, and a dist-tag that has not
 // propagated yet answers with the *previous* version rather than failing. Both must be
 // waited out, or a perfectly good release is reported as a missing one.
-let manifest: { version?: string; bin?: Record<string, string> | string } = {};
+let manifest: { version?: string; bin?: Record<string, string> | string; dependencies?: Record<string, string> } = {};
 let version = "";
 let out = npm(["view", spec, "--json"]);
 for (; ; ) {
@@ -170,6 +191,17 @@ ok(`tarball contains ${declaredTargets.join(", ")}, dist/main.js and client-dist
 // 4. the real user path: global install into a scratch prefix, run from a foreign cwd.
 const prefix = path.join(tmp, "prefix");
 fs.mkdirSync(prefix, { recursive: true });
+// Wait out the dependencies first (see waitForVersion): the canary manifests pin every internal
+// `@piwebui/*` dep to the exact version being verified, so a packument that has not propagated
+// yet fails the install with ETARGET even though the package itself is already visible.
+const internal = Object.entries(manifest.dependencies ?? {})
+  .filter(([name, range]) => name.startsWith("@piwebui/") && range === version)
+  .map(([name]) => name);
+for (const dep of internal) {
+  if (!(await waitForVersion(`${dep}@${version}`, `${pkgName}@${version} depends on it`))) {
+    fail(`the registry still cannot resolve ${dep}@${version} after ${Math.round(settleMs / 1000)}s, although ${pkgName}@${version} declares it — the install would fail with ETARGET.`);
+  }
+}
 // The canary manifest pins its internal deps to the canary version, so this install fails
 // with ETARGET while the replica still serves the dependency graph from before the publish —
 // the same lag as step 1, one layer down, and it takes the whole install with it.
