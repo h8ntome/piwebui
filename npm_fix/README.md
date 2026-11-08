@@ -216,6 +216,33 @@ session against the live registry or a scratch prefix.
    bootstrap hand-publish must use a scratch version, never a number a released sibling already used).
    `docs/CHECKS.md`, `CHANGELOG.md` and this file record the verification.
 
+### The `@latest` convention in the docs
+
+Every install command in the README and `packages/pi-extension/README.md` now spells the dist-tag out
+(`npm install -g @piwebui/pi-web@latest`, `pi install npm:@piwebui/pi-web-bridge@latest`). To npm an
+untagged install *is* `latest`, so this changes nothing about what gets resolved — it changes what a
+reader can *say* about their own machine: the command they pasted names the release they asked for,
+which is the first question when an install looks green but behaves like an older build (cause D).
+Verified rather than assumed, with `PI_CODING_AGENT_DIR` pointed at a scratch dir:
+
+- `pi install npm:@piwebui/pi-web-bridge@latest` → installs `0.1.1`, writes
+  `"packages": ["npm:@piwebui/pi-web-bridge@latest"]` to settings;
+- `pi remove npm:@piwebui/pi-web-bridge` (bare, as documented) still removes it — pi normalizes an npm
+  source to `npm:<name>`, so the tagged install and the untagged removal are the same entry;
+- pi parses a dist-tag as `version="latest"` with no semver range, which leaves the package unpinned
+  and treated as satisfying its own spec — the same behaviour as the untagged form, so `@latest` adds
+  no re-resolution and no surprise update path;
+- `pi -e` really forwards the tag to npm, proved with a nonexistent package so the registry error
+  quotes the spec pi asked for:
+
+  ```
+  $ pi -e npm:@piwebui/no-such-pkg-xyz@latest   # ... '@piwebui/no-such-pkg-xyz@latest' is not in this registry
+  $ pi -e npm:@piwebui/no-such-pkg-xyz         # ... '@piwebui/no-such-pkg-xyz@*' is not in this registry
+  ```
+
+  tagged form asks npm for the `latest` dist-tag, untagged asks for `@*`; both are npm-side
+  resolution, so the tagged form cannot silently mean something else to `pi`.
+
 ## 7. Verification
 
 | Check | Result |

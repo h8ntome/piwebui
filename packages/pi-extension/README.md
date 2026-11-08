@@ -5,7 +5,7 @@ Let a **terminal** [`pi`](https://github.com/badlogic/pi-mono) session be seen a
 configure.
 
 ```bash
-pi install npm:@piwebui/pi-web-bridge     # once, ever
+pi install npm:@piwebui/pi-web-bridge@latest   # once, ever
 ```
 
 That is the whole installation. Start `pi-web` in one terminal, `pi` in another, open the URL

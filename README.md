@@ -25,8 +25,12 @@ a terminal, or managed `pi` SDK child processes for sessions you start in the br
 ## Install
 
 ```bash
-npm install -g @piwebui/pi-web
+npm install -g @piwebui/pi-web@latest
 ```
+
+`@latest` is npm's default, but spelling it out keeps the copy-pasted command honest: it names the
+release you are asking for, and it is the first thing to add when a stale npm cache hands you an older
+build than `npm view @piwebui/pi-web dist-tags` says exists.
 
 One command starts the server and opens the UI in your default browser — no subcommand, no config,
 no login:
@@ -114,7 +118,7 @@ reinstalling this one (`--force` clobbers the other package's launcher, so prefe
 
 ```bash
 npm ls -g pi-web && npm rm -g pi-web    # the *unscoped* one, not @piwebui/pi-web
-npm install -g @piwebui/pi-web
+npm install -g @piwebui/pi-web@latest
 ```
 
 Or keep both and use this package's `piweb` command.
@@ -136,7 +140,7 @@ streaming thinking, tool calls and answers, and accepting prompts from the brows
 extension, once:
 
 ```bash
-pi install npm:@piwebui/pi-web-bridge
+pi install npm:@piwebui/pi-web-bridge@latest
 ```
 
 Then start both sides normally. Nothing else:
@@ -156,8 +160,8 @@ All four are equivalent and all are zero-config afterwards:
 
 | Situation | Command |
 | --- | --- |
-| Normal (recommended) | `pi install npm:@piwebui/pi-web-bridge` |
-| Try it once, change nothing | `pi -e npm:@piwebui/pi-web-bridge` |
+| Normal (recommended) | `pi install npm:@piwebui/pi-web-bridge@latest` |
+| Try it once, change nothing | `pi -e npm:@piwebui/pi-web-bridge@latest` |
 | From a repo checkout / offline | `pi install ./packages/pi-extension` |
 | No `pi` CLI available | `pi-web install-extension` (copies it into `~/.pi/agent/extensions/`, deletes any legacy `pi-web-bridge.mjs`) |
 
@@ -186,7 +190,7 @@ for every knob and for the honest limits (terminal dialogs are answered **in the
 - **Browse real session history** — transcripts, tool calls and results, thinking, tree and branch
   context, statistics. Reads run in an isolated worker restricted to the directories you allowlist.
 - **Control a terminal `pi` from the browser.** Install the bridge once —
-  `pi install npm:@piwebui/pi-web-bridge` — and every `pi` you open afterwards shows up as
+  `pi install npm:@piwebui/pi-web-bridge@latest` — and every `pi` you open afterwards shows up as
   *Terminal (bridged)*, live, with no token, no environment variable and no `pi -e`. While it runs
   you can prompt, steer, follow up, abort, switch model and reasoning, rename, compact, and inspect
   tree/context/snapshot — and your keyboard in the terminal always wins. `/new`, `/resume`, `/fork`
@@ -214,7 +218,7 @@ for every knob and for the honest limits (terminal dialogs are answered **in the
 ### How the connection works
 
 ```bash
-pi install npm:@piwebui/pi-web-bridge      # once, ever
+pi install npm:@piwebui/pi-web-bridge@latest   # once, ever
 pi-web                                     # then, as usual
 pi                                         # any project: it shows up live in the browser
 ```

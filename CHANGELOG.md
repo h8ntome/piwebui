@@ -59,6 +59,12 @@ releases are back-filled below — each release cut replaces the `Unreleased` se
 
 ### Changed
 
+- **Install commands name their dist-tag.** `npm install -g @piwebui/pi-web@latest` and
+  `pi install npm:@piwebui/pi-web-bridge@latest` in the README and the bridge's own docs. npm already
+  defaults to `latest`, so nothing resolves differently; what changes is that a pasted command states
+  which release it asked for — the first question when an install is green but behaves like an older
+  build (see `npm_fix/README.md`, cause D: npm can resolve `latest` from a packument it cached up to
+  five minutes ago). Verified with `pi install`, `pi remove` and `pi -e` against the live registry.
 - **`install-bridge` is deprecated in favour of `install-extension` / `pi install`.** The old
   installer wrote `pi-web-bridge.mjs`, a file pi never auto-discovers (only `.ts`/`.js`), which is
   the whole reason the bridge appeared not to work. `install-bridge` now installs the `.js` and
