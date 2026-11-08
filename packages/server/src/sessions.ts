@@ -501,12 +501,18 @@ export class Sessions {
   }
 
   mode(rec: SessionRec): SessionMode {
-    if (!rec.driver) return rec.file.exists ? "mirror" : "history";
+    if (!rec.driver) {
+      // `file.exists` only turns true after the first tail read, so right after boot a session file
+      // that plainly exists was listed as `history` ("no file") for a moment (BUG-034). Ask the
+      // filesystem when that read has not happened yet, instead of claiming it is gone.
+      return rec.file.exists || (rec.path ? fs.existsSync(rec.path) : false) ? "mirror" : "history";
+    }
     return rec.kind === "managed" ? "managed" : "live";
   }
 
   sourceKind(rec: SessionRec): "file" | "runtime" | "none" {
-    return rec.driver ? "runtime" : rec.file.exists ? "file" : "none";
+    if (rec.driver) return "runtime";
+    return rec.file.exists || (rec.path ? fs.existsSync(rec.path) : false) ? "file" : "none";
   }
 
   compat(rec: SessionRec): SessionStatus["compat"] {
@@ -886,7 +892,7 @@ export class Sessions {
         break;
       }
       case "diag": {
-        this.hub.emit(key, "unknown", { kind: "bridge_diag", ...(ev.payload as object) });
+        this.hub.emit(key, "notice", { kind: "bridge_diag", level: "info", ...(ev.payload as object) });
         break;
       }
       case "dialog_request": {
@@ -927,9 +933,12 @@ export class Sessions {
         if (s.phase === "awaiting_dialog" && ![...s.dialogs.values()].some((x) => !x.answered) && !s.observedDialogs.some((x) => !x.answered)) s.phase = "idle";
         break;
       }
-      case "notify": this.hub.emit(key, "unknown", { kind: "notify", ...ev.payload }); break;
+      // Everything below used to be pushed as `event: unknown`, which the browser ignores: a
+      // terminal extension that failed to bind, or a UI call the browser cannot render, vanished
+      // without a trace (BUG-026). They are named `notice` frames now, and the client shows them.
+      case "notify": this.hub.emit(key, "notice", { kind: "notify", level: "info", message: String(ev.payload.message ?? ev.payload.text ?? "Notice from the runtime"), ...ev.payload }); break;
       case "unsupported_ui":
-        this.hub.emit(key, "unknown", { kind: "unsupported_ui", ...ev.payload });
+        this.hub.emit(key, "notice", { kind: "unsupported_ui", level: "warn", message: `The terminal pi asked the browser for UI it cannot show (${String(ev.payload.method ?? "unknown method")})` });
         logWarn("unsupported_ui", { key: rec.key.slice(0, 10), method: String(ev.payload.method ?? "") });
         break;
       case "host_exiting": break;
@@ -938,7 +947,7 @@ export class Sessions {
         break;
       }
       case "extension_error":
-        this.hub.emit(key, "unknown", { kind: "extension_error", message: ev.payload.message });
+        this.hub.emit(key, "notice", { kind: "extension_error", level: "error", message: `An extension in the owning pi failed: ${String(ev.payload.message ?? "")}`.slice(0, 400) });
         break;
       case "session_shutdown":
         this.hub.emit(key, "resync", { reason: "session_shutdown" });
@@ -946,7 +955,9 @@ export class Sessions {
       case "input_seen": break;
       case "host_exiting_done": break;
       default:
-        this.hub.emit(key, "unknown", { adapterEvent: ev.name, ...(ev.payload as object) });
+        // A runtime event this build has no mapping for is reported, not swallowed; the frame name
+        // is a real one so a client can actually subscribe to it.
+        this.hub.emit(key, "notice", { kind: "unmapped_event", level: "info", adapterEvent: ev.name, message: `Unhandled runtime event: ${ev.name}`, ...(ev.payload as object) });
         break;
     }
   }
@@ -1073,6 +1084,9 @@ export class Sessions {
       driver: rec.driver ? (rec.kind === "managed" ? "managed" : "bridge") : "file",
       state: this.mode(rec) === "mirror" || this.mode(rec) === "history" ? "unavailable" : rec.state.phase,
       runtime: this.identity(rec),
+      file: rec.path
+        ? { path: rec.path, exists: rec.file.exists, sizeBytes: rec.meta.sizeBytes ?? null, modified: rec.meta.modified, generation: rec.file.genId }
+        : null,
       fileGeneration: rec.file.genId ?? "none",
       sessionGeneration: rec.sessionGeneration,
       leaf: { entryId: rec.state.leaf ?? (rec.file.recentEntries.length ? rec.file.recentEntries[rec.file.recentEntries.length - 1]!.entryId : null), source: rec.state.leaf ? "runtime" : "file" },
@@ -1125,6 +1139,7 @@ export class Sessions {
 
   hasCapacity(): boolean {
     const limit = Math.min(MAX_MANAGED_RUNTIMES, this.cfg.maxManaged);
+    const NEVER_RUN_RECLAIM_GRACE_MS = 3 * 60_000;
     if (this.managedCount() < limit) return true;
     // At the limit. Before refusing, give back a slot held by a host that has never run and that
     // nobody is watching: an abandoned "New session" click used to hold one of the four slots
@@ -1132,6 +1147,12 @@ export class Sessions {
     const victims = [...this.byKey.values()]
       .filter((r) => r.kind === "managed" && r.driver && !r.released
         && r.state.phase === "unknown"
+        // A host that is still booting looks exactly like an abandoned one from here (unknown
+        // phase, nothing streaming, nobody watching); evicting it produced a confusing
+        // "host exited during boot" for a session its own client was waiting on. Only hosts that
+        // finished the handshake, and had a chance to be used, are eligible.
+        && r.driver.runtimeId !== "pending" && r.driver.pid > 0
+        && Date.now() - Date.parse(r.createdAt) > NEVER_RUN_RECLAIM_GRACE_MS
         && r.state.previews.size === 0 && r.state.tools.size === 0 && r.state.dialogs.size === 0
         && !this.hub.getStream(r.key).hasSubs())
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt));

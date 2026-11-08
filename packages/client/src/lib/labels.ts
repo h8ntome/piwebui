@@ -31,8 +31,20 @@ const STATE_LABEL: Record<string, string> = {
   error: "Error",
   compacting: "Compacting",
   settled: "Idle",
+  ready: "Ready",
   none: NA,
 };
+
+/**
+ * A managed runtime that has booted but never run reports `state:"unknown"` (nothing has happened
+ * yet, so there is no phase to name). "Unknown" on a healthy session frightened users and testers
+ * alike (BUG-016); say "Ready" when there is a live runtime behind it, and keep "Unknown" when
+ * there is genuinely nothing to go by.
+ */
+export function stateLabelFor(state: string | null | undefined, runtimeAlive: boolean): string {
+  if ((state === "unknown" || state == null) && runtimeAlive) return STATE_LABEL.ready!;
+  return stateLabel(state);
+}
 
 /** A file mirror is not a fault, so it must not read like one (SRV-06 / PNL-04). */
 export function stateLabel(state: string | null | undefined): string {

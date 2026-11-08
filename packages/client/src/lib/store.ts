@@ -4,7 +4,7 @@ import { create } from "zustand";
 import { api, newOperationId, ApiError } from "./api";
 import { SseManager } from "./sse";
 import { humaniseError, isReadOnlyMode } from "./labels";
-import { basename } from "./format";
+import { basename, oneLine } from "./format";
 import { toast } from "../ui/Toast";
 
 function dedupeBy<T>(xs: T[], key: (x: T) => string): T[] {
@@ -161,7 +161,7 @@ interface Store {
   acquireControl: (key: string) => Promise<boolean>;
   renewControl: (key: string) => Promise<boolean>;
   answerDialog: (d: DialogRequest, value: unknown, cancel?: boolean) => Promise<void>;
-  createSession: (workspaceKey: string) => Promise<string | null>;
+  createSession: (workspaceKey: string, init?: { model?: { provider: string; modelId: string }; thinkingLevel?: string; name?: string }) => Promise<string | null>;
   startInWorkspace: (workspaceKey: string, text: string, images?: WireImage[]) => Promise<string | null>;
   heroWorkspace: string | null;
   setHeroWorkspace: (key: string | null) => void;
@@ -546,9 +546,15 @@ export const useStore = create<Store>((set, get) => {
       patch(key, (v) => ({ ...v, dialogs: v.dialogs.filter((x) => x.requestId !== d.requestId) }));
     },
 
-    createSession: async (workspaceKey) => {
+    createSession: async (workspaceKey, init) => {
       try {
-        const out = await api.post<{ sessionKey: string }>("/api/v1/sessions", { workspaceKey });
+        // The endpoint has always accepted model/thinkingLevel/name; the client only ever sent
+        // {workspaceKey}, so a browser session silently inherited pi's defaults (BUG-042).
+        const body: Record<string, unknown> = { workspaceKey };
+        if (init?.model) body.model = init.model;
+        if (init?.thinkingLevel) body.thinkingLevel = init.thinkingLevel;
+        if (init?.name) body.name = init.name;
+        const out = await api.post<{ sessionKey: string }>("/api/v1/sessions", body);
         await get().refreshSessions();
         return out.sessionKey;
       } catch (e) { get().note(humaniseError((e as ApiError).message)); return null; }
@@ -561,7 +567,11 @@ export const useStore = create<Store>((set, get) => {
     /** The hero composer's "pick a workspace, type, send" flow: start a managed pi, wait for
         it to accept input, then deliver the first prompt. Returns the session key. */
     startInWorkspace: async (workspaceKey, text, images) => {
-      const key = await get().createSession(workspaceKey);
+      // Naming the row from the first prompt is what the sidebar shows anyway a refresh later;
+      // doing it at create time stops a fresh row from reading "Untitled session" while the header
+      // already says the folder name (BUG-036).
+      const name = oneLine(text, 60) || undefined;
+      const key = await get().createSession(workspaceKey, name ? { name } : undefined);
       if (!key) return null;
       await get().openSession(key);
       // wait for the runtime to boot and advertise promptStart (bounded; the SSE keeps updating)
@@ -747,6 +757,14 @@ export function applySseEvent(v: SessionView, name: string, payload: unknown): S
     case "hostExited": {
       const p = payload as { reason?: string };
       nv.notes = [...nv.notes.slice(-3), `The runtime exited (${p.reason ?? "unknown"}); this session is now read-only.`];
+      break;
+    }
+    case "notice": {
+      // Runtime-side facts that used to be dropped on the floor: a failing extension in the
+      // terminal pi, UI the browser cannot render, an event this build does not know (BUG-026).
+      const p = payload as { message?: string; level?: string; kind?: string };
+      const msg = String(p.message ?? `Runtime notice: ${p.kind ?? "unknown"}`);
+      nv.notes = [...nv.notes.slice(-3), msg];
       break;
     }
     case "resync":

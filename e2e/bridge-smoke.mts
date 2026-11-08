@@ -16,6 +16,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolvePiPackage } from "../packages/pi-adapter/src/pi-resolve.ts";
 import { startMockProvider, mockModelsJson } from "./lib/mock-provider.ts";
+import { orphanGuard } from "./lib/orphans.ts";
 import { readDescriptor } from "../packages/server/src/descriptor.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -132,13 +133,17 @@ async function main(): Promise<number> {
   // ---------- 1. the server, started exactly like a user starts it ----------
   const dataDir = path.join(home, ".pi-web");
   const serverLog = path.join(home, "server.log");
-  const server = spawn(path.join(ROOT, "node_modules", ".bin", "tsx"), [path.join(ROOT, "packages", "server", "src", "main.ts"), "serve",
+  // The server is detached (own process group) and this suite also owns a pty: killing only the
+  // direct child is how a previous run left a 99%-CPU `ptyrun.py` and dozens of servers behind
+  // (BUG-041). The guard kills every group it was handed, on any exit path, and reports stragglers.
+  const guard = orphanGuard(`piweb-bridge-e2e|ptyrun.py --rows 50`);
+  const server = guard.add(spawn(path.join(ROOT, "node_modules", ".bin", "tsx"), [path.join(ROOT, "packages", "server", "src", "main.ts"), "serve",
     "--data-dir", dataDir, "--port", "0", "--no-open", "--bridge-mode", "dial"], {
     cwd: ROOT,
     env: { ...process.env, HOME: home, PI_CODING_AGENT_DIR: agentDir, PI_SKIP_VERSION_CHECK: "1" },
     stdio: ["ignore", fs.openSync(serverLog, "a"), fs.openSync(serverLog, "a")],
     detached: true,
-  });
+  }));
   let descriptor;
   const descriptorFile = path.join(dataDir, "bridge.json");
   try {
@@ -148,7 +153,7 @@ async function main(): Promise<number> {
     descriptor = r.descriptor;
   } catch (e) {
     console.error("server did not publish a descriptor:", String(e), "\n", fs.readFileSync(serverLog, "utf8").slice(-2000));
-    server.kill("SIGKILL");
+    guard.dispose();
     return 1;
   }
   const banner = fs.readFileSync(serverLog, "utf8");
@@ -199,10 +204,10 @@ async function main(): Promise<number> {
   for (const k of Object.keys(piEnv)) if (k.startsWith("PIWEB_BRIDGE_") && k !== "PIWEB_BRIDGE_DEBUG") delete piEnv[k];
   delete piEnv.PIWEB_DATA_DIR;
 
-  const pty = spawn("python3", [path.join(ROOT, "e2e", "lib", "ptyrun.py"), "--rows", "50", "--cols", "140",
+  const pty = guard.add(spawn("python3", [path.join(ROOT, "e2e", "lib", "ptyrun.py"), "--rows", "50", "--cols", "140",
     "--", "node", cli, "--model", "mock/mock-echo", "--thinking", "low"], {
     cwd: workspace, env: piEnv, stdio: ["pipe", "pipe", "pipe"], detached: true,
-  });
+  }));
   let screen = "";
   pty.stdout?.on("data", (d: Buffer) => { screen += d.toString("utf8"); });
   pty.stderr?.on("data", () => { /* pi warns about the mock provider; not interesting */ });
@@ -265,6 +270,18 @@ async function main(): Promise<number> {
     `entry frames=${entryFrames}`);
   check("R-3b", "the answer text reached the terminal", screen.length > 0 && (screen.includes("bridged") || screen.includes("bridge")),
     `screen ${screen.length} bytes`);
+  // BUG-004: a bridged turn used to mint one preview per streamed chunk and leave every one of
+  // them unfinished, so the browser showed duplicated assistant rows with a permanent "working"
+  // shimmer, replayed from the server's preview map on every reload. R-3 only proved the entry
+  // eventually arrives, which the leak happily allowed.
+  const lastRuntime = [...sse.events].reverse().find((e) => e.name === "runtimeState")?.payload as
+    { phase?: string; previews?: { liveMessageId: string; role: string; done: boolean }[] } | undefined;
+  const previewList = lastRuntime?.previews ?? [];
+  const openPreviews = previewList.filter((p) => !p.done);
+  const dupIds = previewList.length !== new Set(previewList.map((p) => p.liveMessageId)).size ? previewList.length : 0;
+  check("R-3c", "no unfinished or duplicate previews survive a terminal turn",
+    previewList.length <= 8 && openPreviews.length === 0 && !dupIds,
+    `phase=${lastRuntime?.phase} previews=${previewList.length} open=${openPreviews.length} ids=${new Set(previewList.map((p) => p.liveMessageId)).size}`);
 
   // ---------- 5. the browser drives the terminal ----------
   const acquire = async () => {
@@ -388,11 +405,10 @@ async function main(): Promise<number> {
   check("D-2", "/api/v1/runtimes answers with the runtime list", Array.isArray(rt.runtimes), `${rt.runtimes.length} runtime(s) after the kill`);
 
   finish();
-  void server;
-  server.kill("SIGKILL");
+  const leaked = guard.dispose().leaked.length;
   mock.close();
   fs.rmSync(home, { recursive: true, force: true });
-  return rows.every((r) => r.ok) ? 0 : 1;
+  return rows.every((r) => r.ok) && !leaked ? 0 : 1;
 
   function finish(): void {
     console.log(`\n${rows.filter((r) => r.ok).length}/${rows.length} checks passed`);

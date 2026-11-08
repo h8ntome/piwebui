@@ -6,6 +6,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import {
   AddWorkspaceSchema,
+  API_RATE_PER_MINUTE,
   CommandEnvelopeSchema,
   ControlActionSchema,
   CreateSessionSchema,
@@ -276,6 +277,9 @@ export function registerRoutes(app: FastifyInstance, ctx: AppCtx) {
         snapshotEntries: SNAPSHOT_ENTRY_PAGE, sessionsPageMax: SESSIONS_PAGE_MAX,
         sseMaxFrames: 5000, sseMaxBytes: 8 * 1024 * 1024,
         sseHeartbeatMs: 15000, sseClientSilenceMs: 45000, controlTtlMs: 30000, maxManagedRuntimes: cfg.maxManaged,
+        // Name the number instead of leaving clients to guess when to back off (BUG-045): this is
+        // the per-principal token bucket in Auth.rateOk, and it is what answers 429.
+        rateLimitPerMinute: API_RATE_PER_MINUTE,
       },
       auth: { cookie: "piweb_session", csrfHeader: "x-piweb-csrf" },
       protocolVersion: 1,
@@ -558,7 +562,11 @@ export function registerRoutes(app: FastifyInstance, ctx: AppCtx) {
       const { controllerId } = b;
       if (!sessions.capabilities(rec).canControl) throw new ApiError("read_only", "this session has no controllable owning runtime");
       const out = control.acquire(rec.key, controllerId);
-      if ("busy" in out) throw new ApiError("busy", `another browser tab holds control (since ${out.busy.expiresAt ?? "?"})`);
+      if ("busy" in out) {
+        // "another tab holds control" without saying which tab is not actionable when you have
+        // several windows open (BUG-032). The holder id is the same one GET .../control reports.
+        throw new ApiError("busy", `control is held by controller "${out.busy.controllerId ?? "unknown"}" until ${out.busy.expiresAt ?? "the lease expires"}; that tab can release it, or wait for the 30 s lease to lapse`);
+      }
       hub.emit(rec.key, "controlState", { controllerId, epoch: out.grant.epoch, heldByMe: true });
       return { controllerId, epoch: out.grant.epoch, secret: out.grant.secret, expiresAt: new Date(out.grant.expiresAt).toISOString() };
     }
@@ -582,8 +590,10 @@ export function registerRoutes(app: FastifyInstance, ctx: AppCtx) {
     const v = validate(CommandEnvelopeSchema, req.body);
     if (!v.ok) throw new ApiError("invalid_request", v.errors.join("; "));
     const envelope = v.value as CommandEnvelope;
+    // The header is optional because `envelope.operationId` is a perfectly good idempotency key
+    // (and is what this client sends); the message used to demand the header either way (BUG-044).
     const idemKey = (req.headers["idempotency-key"] as string) ?? envelope.operationId;
-    if (!idemKey || idemKey.length < 8) throw new ApiError("invalid_request", "Idempotency-Key header required");
+    if (!idemKey || idemKey.length < 8) throw new ApiError("invalid_request", "a stable idempotency key is required: send the Idempotency-Key header or an envelope.operationId of at least 8 characters");
     const out = await dispatcher.dispatch({ principal: p.id, rec, envelope, idempotencyKey: idemKey });
     reply.code(202);
     return out;

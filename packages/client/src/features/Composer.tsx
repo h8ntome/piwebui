@@ -171,7 +171,7 @@ function ModelMenu({ v, keyName }: { v: SessionView; keyName: string }) {
           // The catalogue may not have existed when the session was opened (CTL-02).
           if (!v.models.length) void loadCatalogue(keyName);
         }}>
-        {cur ? (cur.name ?? `${cur.provider}/${cur.modelId}`) : "Select model"}
+        {cur ? (cur.name ?? v.models.find((m) => m.provider === cur.provider && m.modelId === cur.modelId)?.name ?? `${cur.provider}/${cur.modelId}`) : "Select model"}
       </button>
       {anchor && <FloatingMenu anchor={anchor} align="end" width={280} items={items} onClose={() => setAnchor(null)} />}
     </>

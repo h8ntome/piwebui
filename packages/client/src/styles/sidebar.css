@@ -218,9 +218,15 @@
 .pw-row__slot--folder { color: var(--dsw-static-deepseek-500); }
 .pw-row__title { text-overflow: ellipsis; white-space: nowrap; min-width: 0; font-size: 14px; line-height: 20px; overflow: hidden; flex: 1; margin: 0 var(--pw-sidebar-label-gap); }
 .pw-row__time { color: var(--dsw-alias-label-tertiary); flex: none; margin-inline-end: -1px; font-size: 10px; line-height: 16px; }
-.pw-row__actions { flex: none; align-items: center; gap: 6px; display: none; }
+/* Row actions are invisible until the row is hovered or focused, but they are never
+   `display:none`: a display:none button is not focusable, so keyboard and screen-reader users
+   could not reach Rename, Copy path, New session here, Session options, Remove from allowlist or
+   Download log at all (BUG-038). opacity keeps them in the tab order and in the a11y tree, and
+   :focus-within makes them appear as soon as one of them takes focus. */
+.pw-row__actions { flex: none; align-items: center; gap: 6px; display: inline-flex; opacity: 0; pointer-events: none; }
 .pw-projectRow:hover .pw-row__actions, .pw-sessionRow:hover .pw-row__actions,
-.pw-projectRow--menu .pw-row__actions, .pw-sessionRow--menu .pw-row__actions { display: inline-flex; }
+.pw-projectRow--menu .pw-row__actions, .pw-sessionRow--menu .pw-row__actions,
+.pw-row__actions:focus-within { opacity: 1; pointer-events: auto; }
 .pw-row__actions .pw-iconBtn { width: 24px; height: 24px; color: var(--dsw-alias-label-tertiary); border-radius: var(--dsw-radius-xs); margin: -4px 0; }
 .pw-row__actions .pw-iconBtn:hover { color: var(--dsw-alias-label-primary); background: none; }
 .pw-row__state { flex: none; margin-right: var(--pw-sidebar-label-gap); }
@@ -304,9 +310,9 @@
 .pw-row__time { font-size: 11px; }
 
 /* Row actions must be reachable by keyboard and by touch, not only by hover (SB-07 / A11Y-03). */
-.pw-projectRow:focus-within .pw-row__actions, .pw-sessionRow:focus-within .pw-row__actions { display: inline-flex; }
+.pw-projectRow:focus-within .pw-row__actions, .pw-sessionRow:focus-within .pw-row__actions { opacity: 1; pointer-events: auto; }
 html[data-input-modality="touch"] .pw-row__actions,
-.pw-frame[data-phone] .pw-row__actions { display: inline-flex; }
+.pw-frame[data-phone] .pw-row__actions { display: inline-flex; opacity: 1; pointer-events: auto; }
 
 /* Touch targets: 40px hit areas on phones (MOB-03). */
 .pw-frame[data-phone] .pw-sessionRow { height: 40px; }

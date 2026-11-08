@@ -130,3 +130,6 @@ export const ERROR_HTTP_STATUS: Record<ErrorCode, number> = {
   host_unavailable: 503,
   timeout: 504,
 };
+
+/** Requests one principal may make per minute before the API answers 429 (see Auth.rateOk). */
+export const API_RATE_PER_MINUTE = 600;

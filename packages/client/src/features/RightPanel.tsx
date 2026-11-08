@@ -6,14 +6,14 @@ import { useStore, type FileView, type SessionView } from "../lib/store";
 import { useSettings, useUi, type PanelTab } from "../lib/settings";
 import { Icon } from "../lib/icons";
 import { basename, bytes, timeShort, tokens, copyText, pct, oneLine } from "../lib/format";
-import { modeLabel, stateLabel, driverLabel, entryTypeLabel, plainPreview, humaniseError, NA } from "../lib/labels";
+import { modeLabel, stateLabel, stateLabelFor, driverLabel, entryTypeLabel, plainPreview, humaniseError, NA } from "../lib/labels";
 import { toast } from "../ui/Toast";
 import { Tip } from "../ui/Tooltip";
 
 interface TreeNode { entryId: string; parentId: string | null; type: string; timestamp: string; preview?: string; childIds: string[]; onActiveBranch?: boolean }
 interface TreeResult { roots: string[]; nodes: Record<string, TreeNode>; leaf: { entryId: string | null } }
 interface ContextResult { kind: string; capturedAt: string; model: { provider?: string; modelId?: string; name?: string; contextWindow?: number } | null; thinkingLevel: string | null; messages: { role: string; content: unknown }[]; systemPromptTokens?: number; note?: string }
-interface StatsResult { totalEntries: number; messageCounts: Record<string, number>; usageTotals: { input: number; output: number; cacheRead: number; cost: number | null }; runtimeUsage?: { contextUsage: { tokens: number | null; contextWindow: number; percent?: number | null } | null } | null }
+interface StatsResult { totalEntries: number; messageCounts: Record<string, number>; usageTotals: { input: number; output: number; cacheRead: number; cacheWrite?: number; cost: number | null } | null; runtimeUsage?: { contextUsage: { tokens: number | null; contextWindow: number; percent?: number | null } | null } | null }
 
 function KV({ rows }: { rows: [string, React.ReactNode][] }) {
   return <dl className="pw-kv">{rows.map(([k, v]) => (<div key={k} style={{ display: "contents" }}><dt>{k}</dt><dd>{v}</dd></div>))}</dl>;
@@ -28,13 +28,13 @@ function SessionTab({ v, keyName }: { v: SessionView; keyName: string }) {
       {/* One placeholder vocabulary, translated enums (PNL-04 / GEN-05). */}
       <KV rows={[
         ["Mode", <span key="m" className="pw-pill" style={{ height: 20 }}>{modeLabel(st?.mode)}</span>],
-        ["State", stateLabel(st?.state)],
+        ["State", stateLabelFor(st?.state, !!st?.runtime)],
         ["Driver", driverLabel(st?.driver)],
         ["Workspace", basename(v.meta?.cwd ?? "") || NA],
         ["Session", v.meta?.piSessionId ? <button key="s" className="pw-fileRow" style={{ padding: 0, justifyContent: "flex-start" }} onClick={() => { void copyText(v.meta!.piSessionId!).then((ok) => ok ? toast.success("Session id copied") : toast.error("Could not copy.")); }}><span className="pw-ellipsis">{v.meta.piSessionId.slice(0, 13)}…</span><Icon name="copy-outline" size={12} /></button> : NA],
         ["Messages", v.entryTotal || 0],
         ["Pi", st?.runtime?.piVersion ?? NA],
-        ["Model", v.runtime?.model ? `${v.runtime.model.name ?? v.runtime.model.modelId}` : NA],
+        ["Model", v.runtime?.model ? (() => { const m = v.models.find((x) => x.provider === v.runtime!.model!.provider && x.modelId === v.runtime!.model!.modelId); return `${v.runtime.model.name ?? m?.name ?? v.runtime.model.modelId}`; })() : NA],
         ["Thinking", v.runtime?.thinkingLevel ?? "off"],
       ]} />
       <div style={{ marginTop: 20, display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -103,9 +103,11 @@ function FilesTab({ keyName }: { keyName: string }) {
   const filesWorkspaceKey = useStore((s) => s.filesWorkspaceKey);
   const meta = useStore((s) => (s.activeKey ? s.views[s.activeKey]?.meta : null));
   const readFile = useStore((s) => s.readFile);
-  // A workspace row click wins over the active session's folder (SB-08).
+  // A workspace row click wins over the active session's folder (SB-08). Deliberately *no*
+  // fallback to workspaces[0]: showing an unrelated project above a transcript that belongs to
+  // somewhere else looked like a file tree for the open session when it was not (BUG-039).
   const ws = useMemo(
-    () => workspaces.find((w) => w.key === filesWorkspaceKey) ?? workspaces.find((w) => w.key === meta?.workspaceKey) ?? workspaces[0],
+    () => workspaces.find((w) => w.key === filesWorkspaceKey) ?? workspaces.find((w) => w.key === meta?.workspaceKey),
     [workspaces, filesWorkspaceKey, meta?.workspaceKey],
   );
   const [path, setPath] = useState("");
@@ -122,7 +124,9 @@ function FilesTab({ keyName }: { keyName: string }) {
   }, [readFile, ws]);
 
   useEffect(() => { void load(""); }, [load]);
-  if (!ws) return <div className="pw-row__desc">No allowlisted workspace for this session.</div>;
+  if (!ws) return <div className="pw-row__desc">{workspaces.length
+    ? "This session has no allowlisted workspace, so there is nothing to show here. Click a workspace in the sidebar to browse its files."
+    : "No allowlisted workspace yet."}</div>;
 
   const segs = path ? path.split("/") : [];
   const text = view?.kind === "text" ? (view.text ?? "") : "";
@@ -322,6 +326,14 @@ function ContextTab({ keyName }: { keyName: string }) {
       {stats && (
         <div style={{ marginTop: 16 }}>
           <div className="pw-row__title" style={{ marginBottom: 6 }}>Usage totals</div>
+          {/* Zero that was never reported must not read as "this session cost nothing" (BUG-043):
+              the caveat the server already computes is shown, not left in a JSON field. */}
+          {(() => {
+            const u = stats.usageTotals;
+            const noneReported = !!u && !u.input && !u.output && !u.cacheRead && !u.cacheWrite && u.cost == null;            return noneReported
+              ? <div className="pw-row__desc" style={{ marginBottom: 6 }}>The runtime reported no usage for this session, so these are zeros, not a bill.</div>
+              : null;
+          })()}
           <KV rows={[
             ["Entries", stats.totalEntries],
             ["User / assistant", `${stats.messageCounts.user ?? 0} / ${stats.messageCounts.assistant ?? 0}`],

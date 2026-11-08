@@ -273,12 +273,12 @@ function compressBody(full: string, raw: Buffer, st: fs.Stats, enc: "br" | "gzip
 }
 
 function serveStatic(app: ReturnType<typeof buildServer>, dir: string) {
-  app.get("/boot/theme.js", async (_req, reply) => {
-    reply.header("content-type", MIME[".js"]);
-    reply.header("cache-control", "no-cache");
-    // Blocking same-origin boot script: sets theme attribute before first paint (CSP: 'self').
-    return `try{var m=localStorage.getItem('piweb.theme')||'auto';var light=m==='light'||(m==='auto'&&window.matchMedia&&matchMedia('(prefers-color-scheme: light)').matches);document.documentElement.setAttribute('data-pi-theme',light?'light':'dark');var ap=localStorage.getItem('piweb.appearance');if(ap)document.documentElement.setAttribute('data-pi-appearance',ap);}catch(e){document.documentElement.setAttribute('data-pi-theme','dark');}`;
-  });
+  // No boot-time theme script here on purpose. Pre-paint theming is done by the inline script in
+  // client/index.html, which reads the one setting store the app actually uses
+  // (`piweb:settings:v1.theme` -> `body[data-ds-dark-theme]`). A former GET /boot/theme.js read
+  // `piweb.theme` / set `data-pi-theme` - keys and attributes nothing else has ever used, and no
+  // script tag ever loaded it (BUG-009); deleting it is honest, wiring it would be a second
+  // source of truth.
   app.get("*", async (req, reply) => {
     const url = (req.url ?? "/").split("?")[0]!;
     if (url.startsWith("/api/")) { reply.code(404).type("application/json"); return { error: { code: "not_found", message: "no such api route" } }; }

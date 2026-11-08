@@ -120,6 +120,18 @@ export interface SessionStatus {
   driver: DriverKind;
   state: RunPhase;
   runtime: RuntimeIdentity | null;
+  /**
+   * The file this session is backed by, in one shape: which path, whether it is there right now,
+   * its size/mtime and the read generation. Each endpoint used to expose a different subset of
+   * this, so a client had to know which route it had called (BUG-046).
+   */
+  file?: {
+    path: string;
+    exists: boolean;
+    sizeBytes: number | null;
+    modified: string | null;
+    generation: string | null;
+  } | null;
   fileGeneration: string;
   sessionGeneration: number;
   /** Current leaf id + where it came from: owner live leaf or last on-disk entry. */
@@ -190,7 +202,16 @@ export interface EntryPage {
   /** Lines that failed to parse on this pass (bounded to the first few). */
   diagnostics?: { message: string; byteOffset: number }[];
   leafEntryId: string | null;
+  /**
+   * Entries counted by the pass that produced this page: the whole file for a tail/before read and
+   * for a first page, the remainder from the cursor onwards for a later page. It is *not* the page
+   * length - that was `readEntryPage`'s old meaning here, which collided with the snapshot's
+   * `entryTotal` and made `limit=3` look like a 3-entry session (BUG-035). `pageCount` is the
+   * length of `entries`.
+   */
   entryCount: number;
+  /** How many entries this response actually carries (may be below `entryCount`). */
+  pageCount?: number;
   totalBytes: number;
 }
 
@@ -360,6 +381,7 @@ export type StreamEventName =
   | "dialogResolved"
   | "operationState"
   | "controlState"
+  | "notice"
   | "ownerChanged"
   | "conflict"
   | "resync"
@@ -454,6 +476,8 @@ export interface MetaInfo {
     sseClientSilenceMs: number;
     controlTtlMs: number;
     maxManagedRuntimes: number;
+    /** Requests a principal may make per minute before the bucket answers 429 (see `Auth.rateOk`). */
+    rateLimitPerMinute: number;
   };
   auth: { cookie: string; csrfHeader: string };
   protocolVersion: number;

@@ -148,12 +148,15 @@ export async function readEntryPage(file: string, cursor: string | null | undefi
   let headerVersion: unknown;
   let done = false;
   let nextOffset = startOffset;
+  // Records past the page are still counted (framing only, no decode) so `entryCount` means the
+  // same thing here as it does on every other read: the size of the file (BUG-035).
+  let seen = 0;
   void headerVersion;
   await streamRecords(file, {
     startOffset,
     onRecord: (rec) => {
-      if (done) return;
-      const r = decodeRecord(rec, MAX_RECORD_BYTES);
+      const r = done ? null : decodeRecord(rec, MAX_RECORD_BYTES);
+      if (done || !r) { if (done) seen++; return; }
       if (r.header) {
         headerVersion = r.header.version;
         return;
@@ -161,13 +164,15 @@ export async function readEntryPage(file: string, cursor: string | null | undefi
       if (!r.entry) return;
       if (entries.length >= limit) {
         done = true;
+        seen++;
         return;
       }
+      seen++;
       entries.push(r.entry);
       leaf = r.entry.entryId;
       nextOffset = rec.endOffset;
     },
-    onDiagnostic: (d) => diagnostics.push(d),
+    onDiagnostic: (d) => { if (!done) diagnostics.push(d); },
   });
   const reachedEOF = !done;
   return {
@@ -175,7 +180,8 @@ export async function readEntryPage(file: string, cursor: string | null | undefi
     entries,
     nextCursor: done ? encodeCursor({ f: ident.genId, o: nextOffset }) : null,
     leafEntryId: reachedEOF ? leaf : null,
-    entryCount: entries.length,
+    entryCount: seen,
+    pageCount: entries.length,
     totalBytes: ident.size,
     diagnostics,
   };
@@ -224,6 +230,7 @@ export async function readEntryBefore(file: string, beforeId: string, limit: num
     olderCursor: hasOlder && window.length && found ? window[0]!.entryId : null,
     leafEntryId: null,
     entryCount: total,
+    pageCount: window.length,
     totalBytes: ident.size,
     diagnostics,
   };
@@ -256,6 +263,7 @@ export async function readEntryTail(file: string, limit: number): Promise<EntryP
     nextCursor: null,
     leafEntryId: window.length ? window[window.length - 1]!.entryId : null,
     entryCount: count,
+    pageCount: window.length,
     totalBytes: ident.size,
     diagnostics,
   };

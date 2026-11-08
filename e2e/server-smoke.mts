@@ -15,6 +15,7 @@ import crypto from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { startMockProvider, mockModelsJson } from "./lib/mock-provider.ts";
+import { orphanGuard } from "./lib/orphans.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(HERE, "..");
@@ -36,6 +37,8 @@ const textOf = (content: unknown): string => {
 const EXTERNAL_PORT = process.env.PIWEB_SMOKE_PORT ? Number(process.env.PIWEB_SMOKE_PORT) : null;
 const EXTERNAL_DATA = process.env.PIWEB_SMOKE_DATA || null;
 const PORT = EXTERNAL_PORT ?? 4096 + Math.floor(Math.random() * 4096);
+// Kill the whole tree on any exit, and fail the run if any of *our* servers survives (BUG-041).
+const guard = orphanGuard(`main.ts serve --port ${PORT}`);
 const BASE = `http://127.0.0.1:${PORT}`;
 
 const tmp = EXTERNAL_DATA ? path.dirname(EXTERNAL_DATA) : fs.mkdtempSync(path.join(os.tmpdir(), "piweb-smoke-"));
@@ -63,18 +66,13 @@ if (!EXTERNAL_DATA) {
   db.close();
 }
 
-const server = EXTERNAL_PORT ? null : spawn(process.execPath, ["--import", TSX_LOADER, path.join(ROOT, "packages/server/src/main.ts"), "serve", "--port", String(PORT), "--data-dir", dataDir, "--agent-dir", agentDir], {
+const server = EXTERNAL_PORT ? null : guard.add(spawn(process.execPath, ["--import", TSX_LOADER, path.join(ROOT, "packages/server/src/main.ts"), "serve", "--port", String(PORT), "--data-dir", dataDir, "--agent-dir", agentDir], {
   cwd: ROOT,
   detached: true,
   env: { ...process.env, PIWEB_DATA_DIR: dataDir, PI_CODING_AGENT_DIR: agentDir, PIWEB_MAX_MANAGED: "10", PIWEB_PI_PACKAGE: path.join(ROOT, "node_modules/@earendil-works/pi-coding-agent/dist/index.js") },
   stdio: ["ignore", "pipe", "pipe"],
-});
-const killTree = () => {
-  if (!server) return;
-  try { process.kill(-(server.pid ?? 1), "SIGKILL"); } catch { /* gone */ }
-  try { server.kill("SIGKILL"); } catch { /* gone */ }
-};
-process.on("exit", killTree);
+}));
+const killTree = () => guard.dispose().leaked.length;
 let serverOut = "";
 if (server) {
   const log = fs.openSync("/tmp/piweb-smoke-server.log", "w");
@@ -223,6 +221,9 @@ try { await r2.cancel(); } catch { /* ignore */ }
 
 /* --- S16-S18: four concurrent independent sessions --- */
 const concTarget = 4;
+// S17's mysterious `0` was this harness's own doing (BUG-029): the concurrency round reused the
+// session that S9 had already taken control of, then tried to acquire it under a different
+// controller id - which correctly answered 409 busy, so no prompt was ever sent for it.
 const keys: string[] = [key];
 for (let i = 1; i < concTarget; i++) {
   const c = await fetch(`${BASE}/api/v1/sessions`, { method: "POST", headers: H, body: JSON.stringify({ workspaceKey: wk, model: { provider: "mock", modelId: "mock-echo" }, name: `conc-${i}` }) });
@@ -236,17 +237,46 @@ if (ready && keys.length === concTarget) {
   const allReady = readies.every(Boolean);
   if (allReady) {
     const results17 = await Promise.all(keys.map(async (k, i) => {
-      const ct = await (await fetch(`${BASE}/api/v1/sessions/${k}/control`, { method: "POST", headers: H, body: JSON.stringify({ action: "acquire", controllerId: `conc-controller-${i}` }) })).json() as { epoch?: number; secret?: string };
-      const st = await (await fetch(`${BASE}/api/v1/sessions/${k}`, { headers: H })).json() as { status?: { runtime?: { runtimeId: string; runtimeGeneration: number }; sessionGeneration: number } };
       const oid = `conc-${i}-${Date.now()}`;
-      const r = await command(k, ct, st, { type: "prompt", text: `concurrent ${i} [delay:500]`, delivery: "start" }, oid);
-      return r.status;
+      let status = 0;
+      // S17 used to report a bare `0` for one of the four, which read as a dropped HTTP response
+      // (BUG-029). It was never the network: `command()` answers 0 when the grant or the runtime is
+      // not there yet. So wait for both, retry the acquire honestly, and keep the idempotency key
+      // stable so a retry can never double-prompt.
+      for (let attempt = 0; attempt < 4 && status !== 202; attempt++) {
+        // The first session is the one S9 already controls (and its lease may have lapsed since):
+        // stay with that same controller id instead of asking for a second controller on it.
+        const holder = i === 0 ? "smoke-controller-1" : `conc-controller-${i}`;
+        if (i === 0) {
+          try { await fetch(`${BASE}/api/v1/sessions/${k}/control`, { method: "POST", headers: H, body: JSON.stringify({ action: "renew", controllerId: holder }) }); } catch { /* lapsed or gone */ }
+        }
+        const ct = (i === 0 && typeof ctl.epoch === "number" && ctl.secret)
+          ? ctl
+          : await (await fetch(`${BASE}/api/v1/sessions/${k}/control`, { method: "POST", headers: H, body: JSON.stringify({ action: "acquire", controllerId: holder }) })).json() as { epoch?: number; secret?: string };
+        let st = await (await fetch(`${BASE}/api/v1/sessions/${k}`, { headers: H })).json() as { status?: { runtime?: { runtimeId: string; runtimeGeneration: number }; sessionGeneration: number } };
+        for (let w = 0; w < 20 && !st.status?.runtime?.runtimeId; w++) {
+          await new Promise((res) => setTimeout(res, 500));
+          st = await (await fetch(`${BASE}/api/v1/sessions/${k}`, { headers: H })).json() as typeof st;
+        }
+        if (!ct.epoch || !st.status?.runtime) {
+          // A lapsed 30 s lease shows up as 412 on the command, not here; release + acquire makes
+          // the retry independent of what S9 left behind.
+          try { await fetch(`${BASE}/api/v1/sessions/${k}/control`, { method: "POST", headers: H, body: JSON.stringify({ action: "release", controllerId: holder }) }); } catch { /* ignore */ }
+          await new Promise((res) => setTimeout(res, 700));
+          continue;
+        }
+        try { status = (await command(k, ct, st, { type: "prompt", text: `concurrent marker ${i} [delay:500]`, delivery: "start" }, oid)).status; }
+        catch { status = 0; await new Promise((res) => setTimeout(res, 1_000)); }
+      }
+      return status;
     }));
-    check("S17 parallel prompts accepted on all four", results17.every((s) => s === 202), results17.join(","));
+    check("S17 parallel prompts accepted on all four", results17.every((s) => s === 202), results17.join(",") + " (0 = never got a grant/runtime, 429 = capacity)");
     await new Promise((r) => setTimeout(r, 20_000));
-    const replies = await Promise.all(keys.map(async (k) => {
+    const replies = await Promise.all(keys.map(async (k, i) => {
       const e = await (await fetch(`${BASE}/api/v1/sessions/${k}/entries?limit=500`, { headers: H })).json() as { entries?: { type: string; raw: { message?: { content?: { type: string; text?: string }[] } } }[] };
-      return (e.entries ?? []).some((x) => textOf(x.raw.message?.content).includes("Mock reply"));
+      // Each session must have answered *its own* prompt: checking for any "Mock reply" let one
+      // session's older answer stand in for another's missing one.
+      return (e.entries ?? []).some((x) => textOf(x.raw.message?.content).includes(`concurrent marker ${i}`));
     }));
     check("S18 all four sessions replied independently", replies.every(Boolean), replies.join(","));
 
@@ -266,12 +296,15 @@ if (ready && keys.length === concTarget) {
 }
 
 /* --- S20 pure-read stats --- */
+// The endpoint answers `totalEntries` (+ messageCounts); this row used to assert a field named
+// `entries`, so `npm run smoke` exited 1 on every single run and taught everyone to ignore a red
+// suite (BUG-028).
 if (ready) {
-  const stats = await (await fetch(`${BASE}/api/v1/sessions/${key}/stats`, { headers: H })).json() as { entries?: number };
-  check("S20 stats via pure read worker", typeof stats.entries === "number" && (stats.entries as number) > 0, JSON.stringify(stats).slice(0, 100));
+  const stats = await (await fetch(`${BASE}/api/v1/sessions/${key}/stats`, { headers: H })).json() as { totalEntries?: number; source?: string };
+  check("S20 stats via pure read worker", typeof stats.totalEntries === "number" && (stats.totalEntries as number) > 0, JSON.stringify(stats).slice(0, 120));
 } else {
-  const stats = await (await fetch(`${BASE}/api/v1/sessions/${key}/stats`, { headers: H })).json() as { error?: { code?: string } } & { entries?: number };
-  check("S20 stats via pure read worker", typeof stats.entries === "number" || stats.error?.code === "not_found", JSON.stringify(stats).slice(0, 100));
+  const stats = await (await fetch(`${BASE}/api/v1/sessions/${key}/stats`, { headers: H })).json() as { error?: { code?: string } } & { totalEntries?: number };
+  check("S20 stats via pure read worker", typeof stats.totalEntries === "number" || stats.error?.code === "not_found", JSON.stringify(stats).slice(0, 120));
 }
 
 try { await reader.cancel(); } catch { /* ignore */ }
@@ -282,8 +315,8 @@ function finish(): never {
   const fails = results.filter((r) => r.status === "FAIL").length;
   const skips = results.filter((r) => r.status === "SKIP").length;
   console.log(`\nserver smoke: ${results.length - fails - skips}/${results.length} passed${skips ? `, ${skips} skipped` : ""}`);
-  killTree();
+  const leaked = killTree();
   void mock.close();
   if (!EXTERNAL_DATA) fs.rmSync(tmp, { recursive: true, force: true });
-  process.exit(fails ? 1 : 0);
+  process.exit(fails || leaked ? 1 : 0);
 }

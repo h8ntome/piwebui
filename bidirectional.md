@@ -120,7 +120,7 @@ the owner vanishes, the session degrades to `mirror`/`history` and says so
 A command travels this exact gauntlet (`packages/server/src/commands.ts`):
 
 ```
-POST /api/v1/sessions/:key/commands   (Idempotency-Key header required)
+POST /api/v1/sessions/:key/commands   (Idempotency-Key header, or envelope.operationId)
   1 schema validation (TypeBox, versioned)
   2 rec.driver must exist                        → else 423 read_only
   3 no unresolved file/ownership conflict        → else 423 read_only
@@ -169,10 +169,13 @@ path gives you one runtime with two surfaces.
 ## 6. Control: who is allowed to speak
 
 `ControlGrants` issues `{controllerId, epoch, secret, expiresAt}` per session key, TTL 30 s
-(`CONTROL_TTL_MS`). This arbitrates **browser tabs against each other**, nothing else:
+(`CONTROL_TTL_MS`). `controllerId` and `controlSecret` must each be **at least 8 characters**
+(schema `minLength: 8`; a short id is a `400`, not a busy/conflict answer — worth knowing when you
+write a script against this API). This arbitrates **browser tabs against each other**, nothing else:
 
 * many followers may watch; exactly one tab holds the grant;
-* `acquire` fails with `409 busy` if another live tab holds it;
+* `acquire` fails with `409 busy` if another live tab holds it, and the message names the holding
+  `controllerId` plus the lease expiry, because "another tab has it" is useless when you have six;
 * every command re-validates epoch + secret hash at the server **and** generation at the owner;
 * expiry never aborts a run; the next foreground tab reacquires;
 * the client currently acquires on demand (when `canControl` appears) and does **one transparent
@@ -184,7 +187,10 @@ path gives you one runtime with two surfaces.
 ## 7. Operations: at-least-once with no surprises
 
 Each command becomes an operation row (`accepted → invoked/acked → dispatched → succeeded |
-failed | cancelled | unknown`) with an idempotency key and a payload hash. Rules that matter:
+failed | cancelled | unknown`) with an idempotency key and a payload hash. The key is taken from
+the `Idempotency-Key` header when present and from `envelope.operationId` otherwise, so a client
+that sends only the envelope still gets full dedupe and replay protection (the header is not
+enforced, and this text used to claim it was). Rules that matter:
 
 * the row is written **before** dispatch, so a crash in between is recorded;
 * a dispatch whose outcome is uncertain becomes **`unknown` with `ambiguous` receipt** and is
@@ -298,15 +304,22 @@ handle is demoted rather than duplicating the session.
 
 **Routes (all under `/api/v1`, auth required):** `GET /health` · `GET /meta` · `GET /capabilities` ·
 `GET /runtimes` · `POST /runtimes/:runtimeId/revoke` · `GET /bridge/diagnose` · `GET /events` (SSE,
-server-wide) · `GET|POST|DELETE /workspaces[/:key]` · `GET|POST /sessions` · `GET /sessions/:key` ·
+server-wide) · `GET|POST|DELETE /workspaces[/:key]` · `GET|POST /sessions` · `GET|DELETE /sessions/:key` ·
 `GET /sessions/:key/entries[/:entryId]` · `GET /sessions/:key/tree|context|stats|raw|models|commands`
-· `GET|POST /sessions/:key/control` · `POST /sessions/:key/commands` ·
-`GET /operations/:operationId` · `GET /files` · `GET /sessions/:key/events` (SSE).
+· `GET|POST /sessions/:key/control` · `POST /api/v1/sessions/:key/commands` ·
+`GET|DELETE /hidden-sessions` · `GET /operations/:operationId` · `GET /files` ·
+`GET /sessions/:key/events` (SSE).
+
+`DELETE /sessions/:key` forgets a session in pi-web. It never deletes pi's file: the path goes on
+the hidden list (`pi-web hidden` / `pi-web unhide <path>`, or `DELETE /hidden-sessions?path=…`)
+so the row does not reappear on the next refresh. A session a terminal pi still owns answers
+`423 read_only` — that pi is not pi-web's to stop.
 
 **SSE frame names:** `snapshot, entry, preview, runtimeState, toolState, queueState, dialogRequest,
 dialogResolved, operationState, controlState, ownerChanged, conflict, resync, heartbeat, hostExited,
-streamEnd` — plus the machine-wide stream's `runtimeAttached, runtimeGone, sessionAppeared,
-sessionRetired, bridgeDisabled`.
+notice, streamEnd` — plus the machine-wide stream's `runtimeAttached, runtimeGone, sessionAppeared,
+sessionRetired, bridgeDisabled`. A runtime event this build has no mapping for arrives as a `notice`
+frame (with `level` and `message`), never as an unnamed frame a client silently drops.
 
 **Error → HTTP:** `invalid_request 400 · unauthorized 401 · forbidden 403 · not_found 404 ·
 busy/owner_conflict/idempotency_conflict 409 · cursor_expired 410 · stale_control 412 ·

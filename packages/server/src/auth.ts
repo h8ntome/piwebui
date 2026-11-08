@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { CSRF_HEADER_NAME, DEFAULT_BIND, DEFAULT_PORT, SESSION_COOKIE_NAME } from "@piwebui/shared";
+import { API_RATE_PER_MINUTE, CSRF_HEADER_NAME, DEFAULT_BIND, DEFAULT_PORT, SESSION_COOKIE_NAME } from "@piwebui/shared";
 import { Store } from "./store.ts";
 
 export interface TlsConfig { certFile: string; keyFile: string; }
@@ -230,10 +230,13 @@ export class AuthService {
 
   /** Simple token-bucket per principal for non-SSE API traffic. */
   private buckets = new Map<string, { tokens: number; last: number }>();
+  /** Bucket size and refill, i.e. the sustained requests per minute a principal may make. */
+  static readonly RATE_BUCKET = API_RATE_PER_MINUTE;
+  static readonly RATE_PER_MINUTE = API_RATE_PER_MINUTE;
   rateOk(principalId: string): boolean {
     const now = Date.now();
-    const b = this.buckets.get(principalId) ?? { tokens: 600, last: now };
-    b.tokens = Math.min(600, b.tokens + ((now - b.last) / 60000) * 600);
+    const b = this.buckets.get(principalId) ?? { tokens: AuthService.RATE_BUCKET, last: now };
+    b.tokens = Math.min(AuthService.RATE_BUCKET, b.tokens + ((now - b.last) / 60000) * AuthService.RATE_PER_MINUTE);
     b.last = now;
     if (b.tokens < 1) { this.buckets.set(principalId, b); return false; }
     b.tokens -= 1;
