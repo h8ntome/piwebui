@@ -35,7 +35,7 @@
     "smoke:audit": "tsx e2e/audit-surface.mts"
   },
   "devDependencies": {
-    "@types/node": "22.15.3",
+    "@types/node": "26.6.6",
     "tsx": "4.23.15",
     "typescript": "5.9.3"
   }
