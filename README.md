@@ -325,6 +325,13 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.piwebui.update.plist
 Leave `--restart` out of the scheduled job unless pi-web also runs as a service: an unattended
 restart would drop live controllable sessions.
 
+One trap if you once installed pi-web from a checkout: `@piwebui/shared` and `@piwebui/pi-adapter`
+may still be sitting next to it as separate top-level globals, frozen at whatever version you linked.
+They are not what the server runs — `@piwebui/pi-web` carries its own matching copies inside
+`node_modules` — so `npm ls -g` can show `0.1.0` lines while the server is current. Remove them once
+(`npm rm -g @piwebui/shared @piwebui/pi-adapter`); from then on there is exactly one thing to update,
+and `pi-web update` is it.
+
 ## Security
 
 - Binds `127.0.0.1` by default. A non-loopback bind requires an explicit `--bind` plus matching

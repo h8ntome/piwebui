@@ -199,3 +199,11 @@ was repaired and then the fix was exercised end to end:
   screenshot of the live service) ✔
 - `pi-web update` refuses a source checkout (no `dist/main.js`) instead of npm-installing over it ✔
 
+- The vestigial top-level globals `@piwebui/shared@0.1.0` / `@piwebui/pi-adapter@0.1.0` (left by an old
+  workspace install, and the reason `npm ls -g` still read `0.1.0` after the update) were checked for
+  importers, removed, and the service re-verified: `npm ls -g` now shows one line, health answers
+  `0.1.2-canary.24.f964dbf` from the copies nested inside `@piwebui/pi-web` ✔
+- `pi-web update` (real registry, not a stub): at `0.1.2-canary.22` the installed build reported
+  `0.1.2-canary.24` on `@next`, installed it into its own prefix and restarted the service; health then
+  served `0.1.2-canary.24` ✔
+
