@@ -12,6 +12,19 @@ releases are back-filled below — each release cut replaces the `Unreleased` se
 
 ### Added
 
+- **The workspace folder selector now opens your own OS chooser when your own machine is the one
+  running pi-web.** On macOS that is a Finder Open panel, on Windows the Explorer folder dialog, on a
+  Linux desktop `zenity` (or `kdialog`); the browser tab only points at it, and the answer comes back
+  as the workspace path. Anything that cannot honestly show a window - a remote browser, an SSH
+  tunnel, a headless server, a browser on a different OS than the host, a machine with no
+  desktop chooser - gets the existing in-app folder browser, unchanged, which is also one click away
+  inside the native flow ("Choose in this window"). The decision is per client and per request, and
+  every ambiguity resolves to the in-app browser; `PIWEB_NATIVE_PICKER=off|force` turns it off or
+  forces it across a tunnel. New endpoints `GET /api/v1/browse/mode` and `POST /api/v1/browse/pick`
+  (mutations: same Host/Origin/CSRF fences as everything else, no shell, one panel at a time, and a
+  panel that dies with the tab that asked for it). Design, evidence and the routing table:
+  `docs/research/directory-picker.md` §6; security notes: `SECURITY.md`.
+
 - **`@piwebui/pi-web-bridge`: a terminal `pi` is live in the browser with zero configuration.**
   Install it once (`pi install npm:@piwebui/pi-web-bridge`) and every `pi` you start afterwards —
   in any project, with no environment variables, no `pi -e`, no `piweb allow` and no restart of an

@@ -116,7 +116,11 @@ export type ErrorCode =
   /** The folder picker was asked to create a directory that is already there. */
   | "directory_exists"
   /** The folder picker's create failed for a reason the operator cannot fix from the dialog. */
-  | "directory_create_failed";
+  | "directory_create_failed"
+  /** Native OS folder choosing is not mounted for this client (remote browser, SSH launch, no chooser tool), so the in-app browser answers instead. */
+  | "picker_unavailable"
+  /** The OS chooser itself failed: the tool refused, crashed, or died before answering. */
+  | "native_pick_failed";
 
 export const ERROR_HTTP_STATUS: Record<ErrorCode, number> = {
   invalid_request: 400,
@@ -138,6 +142,8 @@ export const ERROR_HTTP_STATUS: Record<ErrorCode, number> = {
   directory_unreadable: 400,
   directory_exists: 409,
   directory_create_failed: 400,
+  picker_unavailable: 409,
+  native_pick_failed: 502,
 };
 
 /** Requests one principal may make per minute before the API answers 429 (see Auth.rateOk). */

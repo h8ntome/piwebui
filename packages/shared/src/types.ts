@@ -113,6 +113,31 @@ export interface Capabilities {
 
 export type DriverKind = "bridge" | "managed" | "file";
 
+/**
+ * Operator policy for native OS folder choosing: "on" opens the host's own chooser only
+ * when the client is plainly at that host's display; "off" never does; "force" skips the
+ * loopback and SSH gates for an operator who knows their tunnel ends at the same machine.
+ */
+export type PickerPolicy = "off" | "on" | "force";
+
+/** The device a folder picker has to serve, as far as anyone can tell: the browser
+ * says its own platform, the host knows its own. Anything unrecognized is
+ * `other`, which never gets a native chooser.
+ */
+export type DevicePlatform = "darwin" | "win32" | "linux" | "other";
+
+/** Which picker one client gets, and why (see `docs/research/directory-picker.md`). */
+export interface DirectoryPickerMode {
+  /** `native`: the host opens one OS chooser; `browse`: the in-app folder browser answers. */
+  mode: "native" | "browse";
+  /** Human name of the chooser a native pick opens (`"macOS Finder"`); null for browse. */
+  chooser: string | null;
+  /** The host's own platform, so the UI can say where a browse listing is reading. */
+  hostPlatform: DevicePlatform;
+  /** One line saying why this mode won, shown when the operator expected the other one. */
+  reason: string;
+}
+
 export interface SessionStatus {
   sessionKey: SessionKey;
   mode: SessionMode;

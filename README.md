@@ -54,10 +54,17 @@ Allow the project directories whose sessions you want visible — nothing is sca
 pi-web allow /absolute/path/to/your/project
 ```
 
-Or click **Add a workspace folder** in the sidebar and browse for it: the picker is an in-app folder
-browser (breadcrumb, two-pane drill-down, "New folder", a path field you can type into) served by the
-server, so it behaves the same whatever the host OS is — `/` on Linux, `/Users/you` on macOS, and
-`C:\`\, `D:\`\ and UNC shares on Windows.
+Or click **Add a workspace folder** in the sidebar. On macOS and Windows that opens your own folder
+chooser — a Finder window, or the Explorer folder dialog — because the server is on the machine you are
+sitting at. Anywhere else (a remote browser, an SSH tunnel, a headless host, Linux without a desktop)
+it opens an in-app folder browser instead: breadcrumb, two-pane drill-down, "New folder", and a path
+field you can type into, all served by the host, so it behaves the same whatever the host OS is — `/`
+on Linux, `/Users/you` on macOS, and `C:\`\, `D:\`\ and UNC shares on Windows. The in-app browser is
+always one click away inside the native flow too ("Browse folders").
+
+The routing is per client, not per server: a Mac browser talking to a Linux server never gets asked to
+choose a folder on a machine it cannot see. `PIWEB_NATIVE_PICKER=off` turns the OS chooser off entirely,
+and `PIWEB_NATIVE_PICKER=force` re-enables it across an `ssh -L` tunnel that ends at the same computer.
 
 Working from a checkout instead:
 

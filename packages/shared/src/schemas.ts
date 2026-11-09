@@ -96,6 +96,22 @@ export const CreateDirectorySchema = Type.Object({
   name: Type.String({ minLength: 1, maxLength: 255 }),
 });
 
+/**
+ * `GET /api/v1/browse/mode?client=...`: which picker this browser should show.
+ * `client` is the browser's own platform claim ("darwin" | "win32" | "linux" | "other");
+ * it is untrusted input and can only ever *narrow* the answer toward the browse picker.
+ */
+export const BrowseModeQuerySchema = Type.Object({
+  client: Type.Optional(Type.String({ maxLength: 16 })),
+});
+
+/** `POST /api/v1/browse/pick`: ask the host to open its own OS folder chooser. */
+export const NativePickSchema = Type.Object({
+  client: Type.Optional(Type.String({ maxLength: 16 })),
+  /** Folder the chooser should open on, when the client knows one; the host checks it. */
+  startingPath: Type.Optional(Type.String({ maxLength: 4096 })),
+});
+
 export const ControlActionSchema = Type.Object({
   action: Type.Union([Type.Literal("acquire"), Type.Literal("renew"), Type.Literal("release")]),
   controllerId: Type.String({ minLength: 8, maxLength: 64 }),

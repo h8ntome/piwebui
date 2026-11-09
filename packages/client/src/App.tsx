@@ -36,6 +36,9 @@ function BootScreen({ error, onRetry, attempts }: { error: string; onRetry: () =
 
 export function App() {
   const { ready, error, bootAttempts, serverDown, boot, activeKey, views, refreshSessions, createSession, openSession, addWorkspace, workspaces, command } = useStore();
+  const heroKey = useStore((st) => st.heroWorkspace);
+  /** Folder the workspace picker should open on: the current workspace, else the first one. */
+  const heroPath = workspaces.find((w) => w.key === heroKey)?.path ?? workspaces[0]?.path ?? null;
   const sessionCount = useStore((st) => st.sessions.length);
   const settings = useSettings();
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -237,6 +240,9 @@ export function App() {
       {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
       {picker?.open && (
         <DirectoryPicker
+          // Open wherever the operator already works: the in-app browser lands there and the
+          // OS chooser starts there, instead of dropping both at the filesystem root.
+          initialPath={heroPath}
           onClose={() => setPicker(null)}
           onPick={async (path) => {
             const key = await addWorkspace(path, basename(path));

@@ -180,15 +180,43 @@ export function unreadableError(target: string, error: unknown, platform: NodeJS
   return new ApiError("directory_unreadable", `cannot open ${target}: ${why}`, code || undefined);
 }
 
+/**
+ * Whether a failed `stat` means "the OS refused to look" rather than "there is nothing
+ * there". The first is a folder the operator can absolutely pick - on macOS that is TCC
+ * keeping this process from seeing inside a symlinked `~/Documents`, an iCloud placeholder,
+ * or an asleep NAS mount - and dropping its row made such folders impossible to select.
+ * A broken symlink is the second kind, and stays hidden.
+ */
+function refusedByPolicy(error: unknown): boolean {
+  const code = codeOf(error);
+  return code === "EACCES" || code === "EPERM";
+}
+
 /** One row for a scanned child, or null when it is not an enterable directory. */
 async function directoryRow(surface: Surface, parent: string, name: string, isDirectory: boolean, isSymbolicLink: boolean): Promise<DirectoryEntry | null> {
   let enterable = isDirectory;
   if (!enterable && isSymbolicLink) {
-    // Follow the link to decide enterability only; the row keeps its own path.
-    enterable = await stat(surface.join(parent, name)).then((s) => s.isDirectory(), () => false);
+    // Follow the link to decide enterability only; the row keeps its own path. A link the OS
+    // refused to describe stays in the list (see {@link refusedByPolicy}): the folder it
+    // points at is still a workspace, and the level itself will say why it will not list.
+    enterable = await stat(surface.join(parent, name)).then((s) => s.isDirectory(), (error) => refusedByPolicy(error));
   }
   if (!enterable) return null;
   return { name, path: surface.join(parent, name), hidden: name.startsWith(".") };
+}
+
+/**
+ * Whether the host can see `candidate` as a directory right now. Used for a native chooser's
+ * starting folder: the client may name one, but only the host decides whether to honour it.
+ */
+export async function isExistingDirectory(candidate: string, platform: NodeJS.Platform = process.platform): Promise<boolean> {
+  if (!fullyQualified(candidate, platform)) return false;
+  try {
+    const info = await stat(candidate);
+    return info.isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 /** Probe one Windows drive root; slow or unreadable drives are treated as absent. */

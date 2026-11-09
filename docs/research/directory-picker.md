@@ -142,3 +142,103 @@ Windows or macOS machine; it is a dev harness, imported by nothing that ships.
 
 For the reference side: `dsh --profile web --port <p> --no-open`, then `Add workspace` in the sidebar.
 On a headless host the auto resolver picks `browse`, which is the dialog this document describes.
+
+
+## 6. The native tier (added 2026-11-09): who gets Finder, and why
+
+Re-verified with REA 6.8.0 (`analyze-javascript-application`) over the same six shipped picker
+packages — parent Evidence `ev_b905ad79f69e37d1a9ed30f733208e2d7db2bb1387735cd7c41ba93c28830498`,
+summary view `ev_ec77868fcafb8b361b2532ff3788434a94b08d875cf98f58e15d121204556d9e`, artifact digest
+`sha256:a6c984654c0e87be76a4694153fca11197f34807ead1249e14292c2ca2b4f8c1` (31 static sources, 0 parse
+failures, 2 `child-process` spawn nodes in `dsh-host-directory-picker-native/lib/index.js`, plus the
+Windows dialog worker `lib/worker.cjs`). Static artifact evidence; the platform behaviour below was
+then reproduced in pi-web and run for real (see `docs/CHECKS.md`).
+
+What the reference actually does, from `dsh-host-directory-picker-native/lib/index.js` and
+`dsh-host-directory-picker-auto/lib/index.js`:
+
+| fact | evidence |
+| --- | --- |
+| The seam has two backends and two client faces, mounted as a pair by the auto chooser | `BACKEND_PACKAGES` / `SURFACE_PACKAGES` in `…-auto/lib/index.js` |
+| `native` = one OS chooser on the **host's** display; `browse` = the in-app dialog | `NativeDirectoryPicker.capability()` returns `{kind:"native", pick}` |
+| macOS drives `osascript -l JavaScript` running an `NSOpenPanel` with a hand-built Edit menu (⌘C/⌘V in "Go to Folder" resolve against the menu, so a menu-less panel cannot paste), activation queued onto the main operation queue, and only an OK response is read | `MAC_PANEL` in `…-native/lib/index.js` |
+| Windows spawns a child that runs the modern `IFileOpenDialog` over koffi/COM and synthesizes an Alt press so the dialog can take the foreground from a background host | `pickWin32Directory`, `spawnDialogWorker`, `lib/worker.cjs` |
+| Linux uses `zenity --file-selection --directory`, falling back to `kdialog --getexistingdirectory`; exit 1 is a cancel | `pickNativeDirectory` linux branch |
+| A cancel resolves `null`; the client face renders nothing and reports exactly one outcome per open | `outputPath`, `NativeDirectoryFlow` in `dsh-client-ui-directory-picker-native/lib/client.js` |
+| The resolver chooses once at **boot**, from host facts only: loopback bind, no remote authorities, not SSH-launched, and a servable display (assumed on darwin/win32; on Linux it needs `DISPLAY`/`WAYLAND_DISPLAY` **and** an executable `zenity`/`kdialog`) | `resolveDirectoryPickerBackend` |
+
+### Why pi-web could not stop at the reference's rule
+
+The harness assumes its browser is on the harness's machine. pi-web's documented remote cases (SSH
+tunnel, mesh proxy, a server in a container) break that assumption in both directions, and each
+direction fails differently:
+
+- **Mac browser, non-Mac server**: nothing on the server can open a Finder window, so the answer must
+  be the in-app browser — and the folders the operator wanted were never reachable, which is the
+  complaint this tier fixes.
+- **Mac browser, Mac server over `ssh -L`**: the socket peer is loopback (the tunnel), so a
+  loopback-only test is not enough; `SSH_CONNECTION`/`SSH_TTY` on the server is what says "the display
+  over there is not the one you are looking at".
+
+So the routing is computed **per request** from five facts, and every ambiguity resolves to `browse`
+(`packages/server/src/nativePicker.ts`, `resolvePickerMode`):
+
+| gate | refuse reason surfaced in `mode.reason` |
+| --- | --- |
+| `PIWEB_NATIVE_PICKER=off` | "native picking is turned off" |
+| host is not macOS/Windows/Linux-with-desktop | "this host has no OS folder chooser to open" |
+| browser did not identify itself | "this browser did not say what it runs on" |
+| browser platform ≠ host platform | "the browser is on macOS but pi-web is on Linux…" |
+| socket peer is not loopback | "…a chooser would open on the wrong machine" |
+| server launched from SSH | "pi-web was started from an SSH session…" |
+
+`force` drops the last two (an operator who knows their tunnel ends at the same machine). The
+browser's platform claim is untrusted, so it can only ever *narrow* toward browse; the client sends it
+from `navigator.userAgentData?.platform`/`userAgent`/`navigator.platform` (`packages/client/src/lib/device.ts`)
+and phones/tablets deliberately answer `other`.
+
+### What the Mac failures actually were, in order
+
+1. **No native tier existed at all.** `pi-web` shipped only the reference's `browse` interaction, so a
+   Mac operator picked folders by clicking through a listing the *server* produced. If the server was
+   not their Mac, the folder they wanted was unreachable by any amount of clicking.
+2. **macOS privacy (TCC) blocks the listing, not the choice.** A `node` started from a Terminal without
+   the grant gets `EPERM` from `readdir` on `~/Documents`, `~/Desktop`, `~/Downloads` and iCloud's
+   redirected copies. You could still select the folder itself, but not descend into it — so a workspace
+   at `~/Documents/code/x` could not be picked at all. The native panel has no such problem: the human
+   navigates in Finder, and the server only ever receives the resulting absolute path.
+3. **A symlink the host cannot `stat` vanished from the list** (`directories.ts` swallowed the `stat`
+   error and returned no row). On macOS that is exactly what a privacy-protected or iCloud-materialised
+   symlink looks like, so legitimate folders were missing. Now a refusal (`EACCES`/`EPERM`) keeps the row
+   and a genuinely broken link stays hidden (`refusedByPolicy`).
+4. **A request-scoped trap found while wiring the chooser**: `req.raw`'s `close` event fires as soon as
+   the request body has been read, so the first draft aborted the pick the instant it started and the
+   panel closed itself before anyone could click — the "chooser cancels me" shape of failure. The
+   hang-up signal that means something is the response socket closing while the answer is still owed
+   (`packages/server/src/routes.ts`, the `browse/pick` handler).
+
+### The client half
+
+`DirectoryPicker` now has three phases — `deciding` (one mode query, prefetched at boot), `native`
+(the OS panel owns the pick; the dialog only points at it and keeps an escape hatch), and `browse`
+(the Miller dialog, unchanged, and the destination of every refusal and every failed chooser). A
+cancel in the OS panel closes the picker; a chooser that could not open falls through to the panes
+with the reason on screen. Two tabs asking at once share one panel (`NativePickerService`), and a tab
+that goes away closes the window it asked for.
+
+## 7. Re-verify the native tier
+
+```bash
+npx tsx --test packages/server/test/native-picker.test.mts packages/client/test/device.test.mts
+npm run smoke   # rows S28…S30 cover the routing contract and the refusal paths
+
+# Drive the native path on a Linux box with a stand-in chooser (no desktop needed):
+mkdir -p /tmp/fakebin && printf '#!/bin/sh\necho "$FAKE_ANSWER"\n' > /tmp/fakebin/zenity && chmod +x /tmp/fakebin/zenity
+PATH=/tmp/fakebin:$PATH DISPLAY=:0 FAKE_ANSWER=/tmp/piweb-fake-pick PIWEB_NO_OPEN=1 \
+  node packages/server/bin/pi-web.mjs serve --port 5405 --data-dir /tmp/piweb-fake
+# then GET /api/v1/browse/mode?client=linux -> {"mode":"native","chooser":"Zenity",…}
+# and POST /api/v1/browse/pick {"client":"linux"} -> {"path":"/tmp/piweb-fake-pick"}
+```
+
+With no `zenity`/`kdialog`, or no `DISPLAY`, the same server answers `browse` and the in-app dialog is
+what the operator sees — that is the fallback, not a degradation.

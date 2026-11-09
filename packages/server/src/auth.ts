@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { API_RATE_PER_MINUTE, CSRF_HEADER_NAME, DEFAULT_BIND, DEFAULT_PORT, SESSION_COOKIE_NAME } from "@piwebui/shared";
+import { API_RATE_PER_MINUTE, CSRF_HEADER_NAME, DEFAULT_BIND, DEFAULT_PORT, SESSION_COOKIE_NAME, type PickerPolicy } from "@piwebui/shared";
 import { Store } from "./store.ts";
 
 export interface TlsConfig { certFile: string; keyFile: string; }
@@ -19,6 +19,14 @@ export interface Config {
   hostsAllow: string[];
   /** Allowed browser Origins for mutations (exact match). */
   originsAllow: string[];
+  /**
+   * Native OS folder choosing for the workspace picker: "on" (default) opens the host's
+   * own chooser when the client is plainly sitting at that host's display; "off" always
+   * uses the in-app folder browser; "force" skips the loopback/SSH gates for setups where
+   * the operator knows the browser and the host share one display (an `ssh -L` tunnel to
+   * the same machine). See nativePicker.ts.
+   */
+  nativePicker: PickerPolicy;
   /** Pi agent dir override (defaults to ~/.pi/agent when reading settings/themes). */
   agentDir: string | null;
   maxManaged: number;
@@ -57,6 +65,7 @@ export function loadConfig(flags: Partial<Config> = {}): Config {
   if (process.env.PIWEB_AGENT_DIR) env.agentDir = process.env.PIWEB_AGENT_DIR;
   if (process.env.PIWEB_TLS_CERT && process.env.PIWEB_TLS_KEY) env.tls = { certFile: process.env.PIWEB_TLS_CERT, keyFile: process.env.PIWEB_TLS_KEY };
   if (process.env.PIWEB_MAX_MANAGED) env.maxManaged = Number(process.env.PIWEB_MAX_MANAGED);
+  if (process.env.PIWEB_NATIVE_PICKER) env.nativePicker = process.env.PIWEB_NATIVE_PICKER as PickerPolicy;
   const merged = { ...structured({ ...fileCfg, ...env, ...stripUndefined(flags) }) };
   return merged;
 }
@@ -91,6 +100,7 @@ function structured(c: Record<string, unknown>): Config {
     ...(c.tls ? { tls: c.tls as TlsConfig } : {}),
     hostsAllow: [...hosts],
     originsAllow: [...origins],
+    nativePicker: (c.nativePicker as PickerPolicy | undefined) ?? "on",
     agentDir: (c.agentDir as string) ?? null,
     maxManaged: (c.maxManaged as number) ?? 4,
     sessionRootsExtra: (c.sessionRootsExtra as string[]) ?? [],

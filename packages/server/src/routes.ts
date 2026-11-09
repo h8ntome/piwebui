@@ -7,10 +7,12 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import {
   AddWorkspaceSchema,
   API_RATE_PER_MINUTE,
+  BrowseModeQuerySchema,
   CommandEnvelopeSchema,
   ControlActionSchema,
   CreateDirectorySchema,
   CreateSessionSchema,
+  NativePickSchema,
   ENTRIES_PAGE_DEFAULT,
   ENTRIES_PAGE_MAX,
   EntriesQuerySchema,
@@ -41,7 +43,8 @@ import type { Operations } from "./operations.ts";
 import { ApiError, shellEscape, type CommandDispatcher } from "./commands.ts";
 import { discoverThemes } from "./themes.ts";
 import { viewFile } from "./files.ts";
-import { listDirectory, createDirectory } from "./directories.ts";
+import { listDirectory, createDirectory, isExistingDirectory } from "./directories.ts";
+import { NativePickerService, resolvePickerMode, samplePickerFacts } from "./nativePicker.ts";
 import type { BridgeDiscovery } from "./drivers.ts";
 import type { BridgeServer } from "./bridgeServer.ts";
 import type { BridgeWire } from "./bridgeWire.ts";
@@ -626,10 +629,60 @@ export function registerRoutes(app: FastifyInstance, ctx: AppCtx) {
     const q = (req.query ?? {}) as { path?: string };
     return listDirectory(q.path ?? "");
   });
+
   app.post("/api/v1/browse", async (req) => {
     principal(req);
     const input = body<{ path: string; name: string }>(req, CreateDirectorySchema);
     return { path: await createDirectory(input.path, input.name) };
+  });
+
+  /* ---------------- the native OS folder chooser ----------------
+   * Which picker a browser should show, and (when it is native) the one call that opens the
+   * host's own panel. Routing rules and platform mechanics live in nativePicker.ts. The
+   * reason the answer is per-request instead of per-boot: a chooser on the wrong machine is
+   * worse than no chooser, so both the socket peer and the browser's own platform claim get
+   * a vote, and either one can only ever narrow the answer toward the in-app browser. */
+  const picker = new NativePickerService();
+
+  app.get("/api/v1/browse/mode", async (req) => {
+    principal(req);
+    const q = query<{ client?: string }>(req, BrowseModeQuerySchema);
+    return resolvePickerMode(samplePickerFacts({
+      clientPlatform: q.client,
+      peerAddress: req.ip,
+      policy: cfg.nativePicker,
+    }));
+  });
+
+  /* Open the host's own folder chooser and wait for the operator: the answer is the path, or
+     null for a cancel. Long by nature (a person is clicking), so the request stays open for
+     it, and a tab that goes away takes its panel with it instead of leaving a window on the
+     host's desktop that nobody will ever close. */
+  app.post("/api/v1/browse/pick", async (req, reply) => {
+    principal(req);
+    const input = body<{ client?: string; startingPath?: string }>(req, NativePickSchema);
+    const mode = resolvePickerMode(samplePickerFacts({
+      clientPlatform: input.client,
+      peerAddress: req.ip,
+      policy: cfg.nativePicker,
+    }));
+    if (mode.mode !== "native") throw new ApiError("picker_unavailable", mode.reason);
+    // A client may suggest where the panel opens; only the host decides whether to honour it.
+    const start = input.startingPath !== undefined && await isExistingDirectory(input.startingPath)
+      ? input.startingPath
+      : null;
+    const caller = new AbortController();
+    // Not `req.raw`'s "close": with a small JSON body that fires as soon as the request has
+    // been read, which killed the chooser the instant it opened (found with a stand-in zenity,
+    // and it would have looked exactly like a panel that cancels itself). The response socket
+    // closing while we still owe an answer is the hang-up we mean.
+    const hangup = () => { if (!reply.sent) caller.abort(); };
+    reply.raw.once("close", hangup);
+    try {
+      return { path: await picker.pick({ signal: caller.signal, startingPath: start }) };
+    } finally {
+      reply.raw.removeListener("close", hangup);
+    }
   });
 
   /* ---------------- SSE ---------------- */

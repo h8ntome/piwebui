@@ -1,8 +1,18 @@
 /**
- * The "Select Workspace Directory" dialog: a Miller-column browser over real
- * server-side folders, ported from the reference in-app picker
+ * The "Select Workspace Directory" dialog, which is really two pickers behind one entry point.
+ *
+ * Which one you get is the host's answer to one question - can this browser's operator see the
+ * host's screen? - and `GET /api/v1/browse/mode` decides it per client (see
+ * `packages/server/src/nativePicker.ts` and `docs/research/directory-picker.md`). On a Mac or a
+ * Windows box whose pi-web is the machine in front of you, the answer is your own OS chooser: the
+ * dialog asks once, gets out of the way while Finder or the Explorer dialog is up, and closes when
+ * the answer comes back. Everything else - a remote browser, an SSH tunnel, a headless host, a
+ * chooser that failed to open - lands on the Miller-column browser below, which is also one click
+ * away at any time ("Browse folders"). A browser never joins path segments in either tier.
+ *
+ * The browser half is ported from the reference in-app picker
  * (`dsh-client-ui-directory-picker-browse`, verified against the shipped artifact with
- * REA 6.8.0 on 2026-11-09) so the same interaction works on Linux, macOS and Windows.
+ * REA 6.8.0) so the same interaction works on Linux, macOS and Windows.
  *
  * What the port had to keep (the old single-column list broke all three ways):
  * - 680x500 dialog, clamped to short/narrow viewports. The Miller row scrolls sideways,
@@ -27,6 +37,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Dialog } from "../ui/Dialog";
 import { Icon } from "../lib/icons";
 import { useStore } from "../lib/store";
+import type { DirectoryPickerMode } from "@piwebui/shared";
 import {
   DRAFT_PREVIEW_DEBOUNCE_MS,
   PARENT_LEG_WAIT_MS,
@@ -54,6 +65,12 @@ const TEXT = {
   loading: "Loading…",
   truncated: "Too many folders to list; only the beginning is shown.",
   showHidden: "Show hidden files",
+  /** The chooser panel is the OS's window, so the browser can only point at it. */
+  nativeOpening: (chooser: string) => `${chooser} is asking you to choose a folder.`,
+  nativeChecking: "Checking whether this machine can open its own folder chooser…",
+  nativeBehind: "If no chooser appeared, it is behind this window - look for “Select Workspace Directory”.",
+  nativeInstead: "Browse folders",
+  nativeAgain: "Choose again",
 };
 
 /** One column of folder rows (the Miller view renders one or two of these). */
@@ -106,6 +123,19 @@ export function DirectoryPicker({ initialPath, title = "Select Workspace Directo
 }) {
   const browse = useStore((s) => s.browse);
   const createDirectory = useStore((s) => s.createDirectory);
+  const loadDirectoryMode = useStore((s) => s.loadDirectoryMode);
+  const pickNativeDirectory = useStore((s) => s.pickNativeDirectory);
+  /** Which picker the host says this client gets; seeded from the boot prefetch so the dialog
+      does not flash one UI before swapping to the other. */
+  const directoryMode = useStore((s) => s.directoryMode);
+  const [mode, setMode] = useState<DirectoryPickerMode | null>(directoryMode);
+  /** `deciding`: still asking the host; `native`: the OS panel owns the pick; `browse`: the panes do. */
+  const [phase, setPhase] = useState<"deciding" | "native" | "browse">(directoryMode === null ? "deciding" : directoryMode.mode);
+  /** Why native picking gave up, when it did; shown once, above the panes.
+      Not `error`: a browse navigation is allowed to clear that one, and this is not about a folder. */
+  const [nativeNote, setNativeNote] = useState<string | null>(null);
+  const nativeAbort = useRef<AbortController | null>(null);
+  const nativeArmed = useRef(false);
   const [parent, setParent] = useState<DirListing | null>(null);
   const [selected, setSelected] = useState<DirEntry | null>(null);
   const [child, setChild] = useState<DirListing | null>(null);
@@ -140,6 +170,7 @@ export function DirectoryPicker({ initialPath, title = "Select Workspace Directo
     requestSeq.current += 1;
     openGeneration.current += 1;
     scanController.current?.abort();
+    nativeAbort.current?.abort();
   }, []);
   useEffect(() => { viewRef.current = { parent, child }; }, [parent, child]);
 
@@ -293,6 +324,39 @@ export function DirectoryPicker({ initialPath, title = "Select Workspace Directo
     select(entry);
   }, [child, select]);
 
+  /**
+   * One trip to the host's own chooser. A cancel closes the dialog with nothing, the way the
+   * reference's renderless native flow does; a chooser that could not open falls through to
+   * the in-app browser with the reason on screen, so the picker is never a dead end.
+   */
+  const runNativePick = useCallback(() => {
+    const controller = new AbortController();
+    nativeAbort.current = controller;
+    setNativeNote(null);
+    return pickNativeDirectory(initialPath || null, controller.signal).then((picked) => {
+      if (controller.signal.aborted) return;
+      if (picked === null) {
+        onClose();
+        return;
+      }
+      onPick(picked);
+    }, (reason: unknown) => {
+      if (controller.signal.aborted) return;
+      setPhase("browse");
+      setNativeNote(failureText(reason));
+      navigate(initialPath || undefined);
+    });
+  }, [initialPath, navigate, onClose, onPick, pickNativeDirectory]);
+
+  /* The host decides whose picker this is, because only the host knows where its display is.
+     Until it answers nothing browses: a folder list that flashes and is replaced by a Finder
+     window is worse than a beat of silence. The answer is cached in the store from boot. */
+  useEffect(() => {
+    if (phase !== "native" || nativeArmed.current) return;
+    nativeArmed.current = true;
+    void runNativePick();
+  }, [phase, runNativePick]);
+
   useEffect(() => {
     openGeneration.current += 1;
     setParent(null);
@@ -302,9 +366,24 @@ export function DirectoryPicker({ initialPath, title = "Select Workspace Directo
     setShowHidden(false);
     setPicking(false);
     setUnlistable(false);
-    navigate(initialPath || undefined);
+    setNativeNote(null);
+    nativeArmed.current = false;
+    if (phase === "deciding") {
+      // One question, asked once: whose chooser is this? The answer swaps the dialog's body.
+      void loadDirectoryMode().then(
+        (answer) => {
+          const settled = answer ?? { mode: "browse" as const, chooser: null, hostPlatform: "other" as const, reason: "the server did not answer, so the folder browser is answering" };
+          setMode(settled);
+          setPhase(settled.mode);
+        },
+        () => setPhase("browse"),
+      );
+      return () => { supersede(); };
+    }
+    // While the OS panel owns the pick there is nothing to list: the panes are not on screen.
+    if (phase !== "native") navigate(initialPath || undefined);
     return () => { supersede(); };
-  }, [initialPath, navigate, supersede]);
+  }, [initialPath, loadDirectoryMode, navigate, phase, supersede]);
 
   /** The folder a create or Open acts on: the selection, else the listed level. */
   const targetPath = selected?.path ?? parent?.path ?? null;
@@ -411,6 +490,7 @@ export function DirectoryPicker({ initialPath, title = "Select Workspace Directo
   /** Escape/ dismissal order: the create dialog first, then the path editor, then the picker. */
   const requestDismiss = () => {
     if (folderDraft !== null || picking) return;
+    if (phase === "native") { nativeAbort.current?.abort(); onClose(); return; }
     if (pathDraft !== null) { cancelPathEdit(); return; }
     onClose();
   };
@@ -426,6 +506,50 @@ export function DirectoryPicker({ initialPath, title = "Select Workspace Directo
     setPicking(true);
     onPick(targetPath);
   };
+
+  /** Leave the OS panel behind and drive the panes by hand instead. */
+  const switchToBrowse = () => {
+    nativeAbort.current?.abort();
+    nativeArmed.current = true;
+    setPhase("browse");
+    if (parent === null) navigate(initialPath || undefined);
+  };
+
+  /* The native half: the host's own panel is doing the choosing, so all this dialog can do is
+     point at it and keep a way out. The reference's client face for this mode renders nothing
+     at all, which works only because its chooser is guaranteed to appear; a browser tab that
+     goes silent with no explanation is a bug report waiting to happen. */
+  if (phase !== "browse") {
+    const chooser = mode?.chooser ?? "the folder chooser";
+    return (
+      <Dialog
+        title={title}
+        onClose={requestDismiss}
+        size="sm"
+        footer={
+          <>
+            <button className="pw-btn pw-btn--sm pw-btn--outline pw-dirpick__nativeAction" onClick={switchToBrowse}>{TEXT.nativeInstead}</button>
+            <span className="pw-dirpick__footerGap" />
+            <button className="pw-btn pw-btn--sm pw-btn--outline pw-dirpick__nativeAction" onClick={requestDismiss}>{TEXT.cancel}</button>
+            {phase === "native" && (
+              // Asking twice is harmless: the host shares one open panel between every caller.
+              <button className="pw-btn pw-btn--sm pw-btn--primary pw-dirpick__nativeAction" data-autofocus onClick={() => void runNativePick()}>
+                {TEXT.nativeAgain}
+              </button>
+            )}
+          </>
+        }
+      >
+        <div className="pw-dirpick__native" role="status">
+          <Icon name="folder-open" size={18} />
+          <div className="pw-dirpick__nativeText">
+            <div>{phase === "native" ? TEXT.nativeOpening(chooser) : TEXT.nativeChecking}</div>
+            {phase === "native" && <div className="pw-dirpick__nativeHint">{TEXT.nativeBehind}</div>}
+          </div>
+        </div>
+      </Dialog>
+    );
+  }
 
   return (
     <>
@@ -570,6 +694,9 @@ export function DirectoryPicker({ initialPath, title = "Select Workspace Directo
             )}
             {(parent?.truncated === true || child?.truncated === true) && (
               <div className="pw-dirpick__status" role="status">{TEXT.truncated}</div>
+            )}
+            {nativeNote !== null && (
+              <div className="pw-dirpick__status" role="status">{nativeNote}</div>
             )}
             {error !== null && (
               <div className="pw-dirpick__error" role="alert">{failureText(error)}</div>

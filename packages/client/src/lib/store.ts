@@ -5,6 +5,8 @@ import { api, newOperationId, ApiError } from "./api";
 import { SseManager } from "./sse";
 import { humaniseError, isReadOnlyMode } from "./labels";
 import type { DirListing } from "./directories";
+import { detectDevicePlatform } from "./device";
+import type { DirectoryPickerMode } from "@piwebui/shared";
 import { basename, oneLine } from "./format";
 import { toast } from "../ui/Toast";
 
@@ -176,6 +178,15 @@ interface Store {
   addWorkspace: (path: string, label?: string) => Promise<string | null>;
   browse: (path?: string, signal?: AbortSignal) => Promise<BrowseResult>;
   createDirectory: (path: string, name: string) => Promise<string>;
+  /** Which folder picker the host offers this browser (native OS chooser vs in-app browser). */
+  directoryMode: DirectoryPickerMode | null;
+  loadDirectoryMode: (force?: boolean) => Promise<DirectoryPickerMode | null>;
+  /**
+   * Ask the host to open its own OS folder chooser and wait for the operator. Resolves with
+   * the chosen path, or null for a cancel; rejects when the chooser itself failed, which is
+   * the signal for the caller to fall back to the in-app browser.
+   */
+  pickNativeDirectory: (startingPath?: string | null, signal?: AbortSignal) => Promise<string | null>;
   readFile: (workspaceKey: string, path: string) => Promise<FileView | null>;
   note: (msg: string) => void;
 }
@@ -312,6 +323,9 @@ export const useStore = create<Store>((set, get) => {
         }
         const health = await api.get<Store["health"]>("/api/v1/health");
         set({ ready: true, error: null, health, bootAttempts: 0 });
+        // Warm the picker routing before the first "Add workspace" press, so the native
+        // chooser opens on that click instead of a round trip later.
+        void get().loadDirectoryMode();
         await get().refreshSessions();
         get().watchGlobal();
       } catch (e) {
@@ -646,6 +660,32 @@ export const useStore = create<Store>((set, get) => {
     /** "New folder" in the picker: one child of `path`, named `name`; the created path comes back. */
     createDirectory: async (path, name) => {
       const out = await api.post<{ path: string }>("/api/v1/browse", { path, name }, newOperationId());
+      return out.path;
+    },
+
+    directoryMode: null,
+
+    /**
+     * Which picker this browser should show. Asked once per tab and cached: the answer comes
+     * from the socket peer and the platform claim, neither of which changes mid-session, and
+     * the "Add workspace" button should not wait on a round trip. A failed read leaves it
+     * null, which means the in-app browser - the answer that always works.
+     */
+    loadDirectoryMode: async (force) => {
+      if (!force && get().directoryMode) return get().directoryMode;
+      try {
+        const mode = await api.get<DirectoryPickerMode>(`/api/v1/browse/mode?client=${detectDevicePlatform()}`);
+        set({ directoryMode: mode });
+        return mode;
+      } catch {
+        return null;
+      }
+    },
+
+    pickNativeDirectory: async (startingPath, signal) => {
+      const body: Record<string, string> = { client: detectDevicePlatform() };
+      if (startingPath) body.startingPath = startingPath;
+      const out = await api.post<{ path: string | null }>("/api/v1/browse/pick", body, undefined, signal ? { signal } : undefined);
       return out.path;
     },
 

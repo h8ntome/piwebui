@@ -365,6 +365,34 @@ if (ready) {
 
   const noCsrfCreate = await fetch(`${BASE}/api/v1/browse`, { method: "POST", headers: { cookie, "content-type": "application/json", origin: BASE }, body: JSON.stringify({ path: pickRoot, name: "nope" }) });
   check("S27 New folder without the csrf token is refused", noCsrfCreate.status === 403 && !fs.existsSync(path.join(pickRoot, "nope")), String(noCsrfCreate.status));
+
+  /* S28..S30: the picker's routing question and the OS chooser. This harness always talks over
+     loopback, so what is under test is the *refusal* path - a browser claiming another platform
+     must never be able to make the host open a window - plus the shape of the answer the client
+     routes on. The positive native path is covered by unit tests with a stand-in chooser. */
+  const modeOther = await (await fetch(`${BASE}/api/v1/browse/mode?client=darwin`, { headers: H })).json() as { mode: string; chooser: string | null; hostPlatform: string; reason: string };
+  check("S28 the picker mode names a tier, a host platform and a reason",
+    (modeOther.mode === "native" || modeOther.mode === "browse")
+      && typeof modeOther.reason === "string" && modeOther.reason.length > 0
+      && ["darwin", "win32", "linux", "other"].includes(modeOther.hostPlatform), JSON.stringify(modeOther));
+
+  const claimedElsewhere = process.platform === "win32" ? "linux" : "win32";
+  const modeMismatch = await (await fetch(`${BASE}/api/v1/browse/mode?client=${claimedElsewhere}`, { headers: H })).json() as { mode: string; reason: string };
+  check("S28b a browser claiming another platform is routed to the in-app browser",
+    modeMismatch.mode === "browse" && modeMismatch.reason.includes("but pi-web is on"), JSON.stringify(modeMismatch));
+
+  const refusedPick = await fetch(`${BASE}/api/v1/browse/pick`, { method: "POST", headers: H, body: JSON.stringify({ client: claimedElsewhere }) });
+  const refusedBody = await refusedPick.json() as { error?: { code?: string } };
+  check("S29 a mismatched client cannot make the host open a chooser",
+    refusedPick.status === 409 && refusedBody.error?.code === "picker_unavailable", `${refusedPick.status} ${JSON.stringify(refusedBody)}`);
+
+  const noCsrfPick = await fetch(`${BASE}/api/v1/browse/pick`, { method: "POST", headers: { cookie, "content-type": "application/json", origin: BASE }, body: JSON.stringify({ client: process.platform }) });
+  check("S29b the chooser needs the csrf token like any other mutation", noCsrfPick.status === 403, String(noCsrfPick.status));
+
+  const bogusStart = await fetch(`${BASE}/api/v1/browse/pick`, { method: "POST", headers: H, body: JSON.stringify({ client: process.platform, startingPath: path.join(pickRoot, "Alpha", "inner") }) });
+  const startShape = typeof (await (await fetch(`${BASE}/api/v1/browse/mode?client=${process.platform}`, { headers: H })).json()) === "object";
+  check("S30 a native pick answers {path} or an error, never a bare 500",
+    startShape && (bogusStart.status === 200 || bogusStart.status === 409 || bogusStart.status === 502), String(bogusStart.status));
 }
 
 try { await reader.cancel(); } catch { /* ignore */ }

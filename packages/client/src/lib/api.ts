@@ -32,8 +32,8 @@ async function request<T>(path: string, init: RequestInit = {}, idempotencyKey?:
 
 export const api = {
   get: <T,>(path: string, init?: RequestInit) => request<T>(path, init ?? {}),
-  post: <T,>(path: string, body?: unknown, idem?: string) =>
-    request<T>(path, { method: "POST", body: body === undefined ? null : JSON.stringify(body) }, idem),
+  post: <T,>(path: string, body?: unknown, idem?: string, init?: RequestInit) =>
+    request<T>(path, { ...init, method: "POST", body: body === undefined ? null : JSON.stringify(body) }, idem),
   del: <T,>(path: string) => request<T>(path, { method: "DELETE" }),
   setCsrf: (t: string) => { csrfToken = t; },
   getCsrf: () => csrfToken,

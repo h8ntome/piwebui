@@ -325,6 +325,15 @@
 .pw-dirpick__error { color: var(--dsw-alias-state-error-primary); overflow-wrap: anywhere; }
 .pw-dirpick__loadingFloat { background: var(--dsw-alias-bg-layer-2); padding: 2px 8px; position: absolute; bottom: 8px; right: 16px; }
 
+/* The native half: one line pointing at the OS window the host just opened, plus the reason
+   it is not on screen when that window went missing. Deliberately quiet - the real dialog is
+   the OS's, and this only has to explain the gap. */
+.pw-dirpick__native { display: flex; gap: 10px; align-items: flex-start; padding: 4px 2px; color: var(--dsw-alias-label-primary); font-size: 13px; line-height: 20px; }
+.pw-dirpick__native > svg { color: var(--dsw-alias-label-secondary); margin-top: 2px; flex: none; }
+.pw-dirpick__nativeText { min-width: 0; }
+.pw-dirpick__nativeHint { color: var(--dsw-alias-label-secondary); font-size: 12px; line-height: 18px; margin-top: 2px; }
+.pw-dirpick__nativeAction { white-space: nowrap; }
+
 /* footer controls */
 .pw-dirpick__showHidden {
   color: var(--dsw-alias-label-secondary); cursor: pointer; white-space: nowrap; background: none; border: none;

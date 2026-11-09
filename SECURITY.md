@@ -122,6 +122,35 @@ who can open a TCP connection to it can read and drive the sessions in your allo
   your own consent. If you want the old belt anyway, set `bridge.allowCwd` (`PIWEB_BRIDGE_ALLOW_CWD`)
   to a prefix list, and `PIWEB_BRIDGE_DISABLE=1` on a `pi` opts that terminal out entirely.
 
+### Opening a folder chooser on the host's display
+
+`POST /api/v1/browse/pick` makes the server launch one OS folder chooser (`osascript` for Finder,
+PowerShell's folder dialog on Windows, `zenity`/`kdialog` on a Linux desktop) and wait for the answer.
+It is a mutation, so it rides the same Host / Origin / CSRF / session-cookie fences as every other
+write, it is rate limited, and it runs the chooser as a child process with **no shell**: the prompt and
+the starting folder travel as argv or environment, never interpolated into a command line, and the
+child's output is capped at 16 KiB.
+
+The risk this endpoint carries is not path traversal, it is *prompting the operator*: a panel that opens
+on the host's screen can be used to ask a human to click something. So the native tier is refused unless
+every one of these holds, and the answer is computed per request rather than at boot:
+
+- the request arrived over a **loopback socket** (`req.ip`; `trustProxy` is off, so this is the real peer),
+- the **browser's own platform claim matches the host's** — the claim is untrusted and can only ever
+  narrow the answer toward the in-app browser, never toward opening a window,
+- pi-web was **not started from an SSH session** (`SSH_CONNECTION`/`SSH_TTY`),
+- the platform can actually serve a chooser (on Linux: a `DISPLAY`/`WAYLAND_DISPLAY` session and an
+  executable `zenity` or `kdialog`),
+- and the operator has not set `PIWEB_NATIVE_PICKER=off`.
+
+`PIWEB_NATIVE_PICKER=force` drops the loopback and SSH conditions, which is only correct when the tunnel
+ends at the machine the operator is typing on — that is why it is opt-in. One chooser is open at a time
+(a second request joins it), and if the asking tab goes away the panel is closed with it, so a browser
+cannot leave windows stacked on someone else's desktop.
+
+Everything else — browsing levels, creating a folder — is unchanged: names only, absolute host paths the
+host produced, and the same workspace allowlist before any path is used as a session cwd.
+
 ## Trust model, stated plainly
 
 - **pi-web can do whatever pi can do in an allowed workspace.** A control grant is equivalent to typing

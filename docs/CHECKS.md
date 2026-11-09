@@ -39,7 +39,7 @@ Boot, auth (exchange/CSRF/host checks), workspace allowlist, meta/capabilities, 
 create, SSE snapshot-on-subscribe, control grants, idempotent command dispatch, live phase
 transitions over SSE, persistence-by-pi, static client serving, reconnect Last-Event-ID behavior,
 **four concurrent independent managed sessions** prompted in parallel, replayed idempotency keys,
-pure-read stats, and the **workspace folder picker** (`S21`–`S27`: level listing shape, host paths and
+pure-read stats, the **workspace folder picker** (`S21`–`S30`: level listing shape, host paths and
 hidden flags, root-to-target crumbs, home default, `invalid_request` on a relative path,
 `directory_unreadable` instead of a raw node error, `New folder` create, `directory_exists`, single-segment
 name refusal, CSRF on the create). See script for exact assertions S1–S27.
@@ -62,6 +62,17 @@ after the folder-picker rebuild.
   instead of a raw node code, single-segment create refusal, `directory_exists`, the macOS privacy copy).
   The client suite pins what the panes show: separator inference from the host's home path, draft→directory
   reading on both separator styles, breadcrumb folding at Home, and the hidden/prefix filter rules.
+- **Native chooser + routing (`packages/server/test/native-picker.test.mts`, 22 tests, and
+  `packages/client/test/device.test.mts`, 5 tests).** The resolver suite pins who is allowed a window:
+  Mac-on-Mac and Windows-on-Windows get Finder / Explorer; a Mac browser on a Linux host, a non-loopback
+  peer, an SSH-launched server, an unidentifiable browser, a headless Linux box and
+  `PIWEB_NATIVE_PICKER=off` all get the in-app browser, each with the reason that says so; `force`
+  re-opens the tunnel case. The chooser suite runs each platform branch against a stand-in runner and
+  pins the important distinctions — the prompt and starting folder reach the child as argv/env (never
+  interpolated into the script), Finder's cancel is exit 0 with an empty line while a non-zero exit is a
+  failure with its stderr, zenity's exit 1 is a cancel, a missing zenity falls through to kdialog but a
+  *broken* zenity is reported, one panel is shared by concurrent callers, a caller that hangs up closes
+  the panel, and the watchdog kills a chooser that never answers.
 - Cross-OS check that does not need a Windows or macOS machine: the pure rules above are platform-parameterised,
   and `npx tsx e2e/lib/picker-platform-stub.mts <port> <win32|darwin> <upstream>` serves the real client a
   simulated host so the dialog can be driven through a Windows tree (drives, `D:\`, "This PC") or a macOS
@@ -130,3 +141,25 @@ the first `/api` request. Re-verified against a throwaway data dir on loopback:
   ~3s to >60s observed — affects wall-clock of tests, not correctness.
 - NetBird interface present (`100.108.239.49`); existing Paseo proxy on :6767 untouched.
 - No public ingress created or modified by pi-web at any point.
+
+**Dated 2026-11-09 — the native folder chooser.** End to end against throwaway data dirs on loopback,
+with `/tmp/fakebin/zenity` standing in for a desktop chooser (2 s "human" delay, and a mode that exits 1):
+
+- `GET /api/v1/browse/mode?client=linux` on a `DISPLAY`+`zenity` host → `{mode:"native",chooser:"Zenity"}` ✔;
+  `client=darwin` on the same Linux host → `browse` with the "browser is on macOS but pi-web is on Linux"
+  reason ✔; no `DISPLAY`/`zenity` → `browse` naming the missing piece ✔
+- `POST /api/v1/browse/pick` waits for the chooser (2.0 s) and returns `{path:"/tmp/native-picked/deep"}` ✔;
+  a chooser that exits 1 returns `{path:null}` ✔; a client claiming another platform gets 409
+  `picker_unavailable` and no window ✔; without `x-piweb-csrf` → 403 ✔
+- **A panel does not outlive the tab that asked for it**: hang up at 0.5 s and no chooser process is left
+  0.5–3.0 s later (`pgrep` sampled each 0.5 s); the next pick then works normally ✔
+- Two tabs asking at once open **one** chooser (logged once) and both receive the same answer ✔
+- `startingPath` reaches the chooser as its working directory, and only after the host has checked it is a
+  real directory (a bogus path is ignored rather than refused) ✔
+- Browser pass (`agent-browser`): on the chooser host, `Add workspace` → "Zenity is asking you to choose a
+  folder" with `Browse folders` / `Cancel` / `Choose again`, and the workspace appears by
+  itself when the chooser answers ✔; on a host with no chooser, `Add workspace` → the Miller dialog and
+  `Open` adds the workspace (toast `Workspace dev added · /home/dev`) ✔
+- `npm run smoke`: **38/38** (new rows `S28`–`S30`); `npm run test:unit`: 143 tests (22 of them the new chooser/routing suite, 5 the device claim); `tsc` clean on all
+  four projects; `npm run check:cli` green after the README/SECURITY/CHANGELOG updates.
+
