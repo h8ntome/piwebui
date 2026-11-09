@@ -180,3 +180,22 @@ operational, not code: the global install on this box was `@piwebui/pi-web@0.1.0
 - `pi-web update` unit tests: canary ordering (`canary.2 < canary.10`, release > its own canaries),
   tag defaulting, plan text for registry-unreachable, check-never-installs, install-targets-own-prefix ✔
 
+**Dated 2026-11-09 — the update loop, run for real (not simulated). An install older than
+`0.1.2-canary.22` has no `update` command at all, so the bootstrap is one manual `npm i -g`; the loop
+below starts from a build that has it.** The stale-install state above
+was repaired and then the fix was exercised end to end:
+
+- `npm i -g @piwebui/pi-web@0.1.2-canary.22.e3e41f1` into the prefix on PATH; `pi-web --version` and
+  `/api/v1/health` both report it, and the installed tree contains the picker work
+  (`dist/nativePicker.js`, `browse/mode` + `browse/pick` in `dist/routes.js`, the chooser copy in the
+  client bundle) ✔
+- **Downgraded the installed manifest back to `0.1.2-canary.19` to make a stale install on purpose.**
+  `pi-web update --check` named both versions and installed nothing; `pi-web update --restart` then
+  installed `0.1.2-canary.22`, restarted `pi-web.service`, and the running server answered the new
+  version ✔ (this is exactly what the daily timer runs)
+- `systemctl --user enable --now pi-web.service pi-web-update.timer`: service `active`, timer armed
+  for 04:40 (+randomised), `Linger=yes`, and `pi-web-update.service` ran with `Result=success` ✔
+- Sidebar chip renders `pi-web 0.1.2+22.e3e41f1` beside `pi 1.5.0` (agent-browser snapshot +
+  screenshot of the live service) ✔
+- `pi-web update` refuses a source checkout (no `dist/main.js`) instead of npm-installing over it ✔
+

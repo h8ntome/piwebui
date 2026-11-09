@@ -11,6 +11,38 @@ releases are back-filled below — each release cut replaces the `Unreleased` se
 ## [Unreleased]
 
 ### Added
+
+- **`pi-web update`, and a build you can actually see.** Publishing was never the gap - CI puts a
+  canary on `@next` for every push to `main` and a release on `@latest` for every tag. The gap was
+  the install: a global npm prefix keeps serving whatever was installed into it, and nothing
+  re-installed it, so a browser could sit on a four-day-old UI (`0.1.0` here, while `@latest` was
+  `0.1.1` and `@next` had moved nine canaries) with nothing on the screen saying which build it was.
+  `pi-web update [--check|--tag T|--restart|--json]` reads the registry, follows the tag the install
+  is already on (a canary stays on `@next`, a release stays on `@latest` - an installed release is
+  never quietly replaced by a bleeding-edge build), and installs into **the prefix this file was
+  loaded from**, not what `npm prefix -g` answers, because a machine with two Node installs must
+  update the one in use. It refuses to run against a source checkout, and it does not restart
+  anything unless told: a restart drops live controllable sessions.
+- **The sidebar prints the running build** (`pi-web 0.1.2+22.e3e41f1` next to `pi 1.5.0`, full
+  version and server id in the tooltip), so "am I looking at the old one?" is answerable without a
+  terminal.
+- **`deploy/systemd/` and `deploy/launchd/`** ship the always-on `pi-web.service`, the daily
+  `pi-web-update.timer` (`Persistent=true`, so a machine that was off catches up), and the macOS
+  LaunchAgent equivalent. README "Staying up to date".
+
+### Fixed
+
+- A workspace folder selected on macOS could be missing from the picker entirely: a symlink whose
+  `stat` failed was dropped from the listing, and on macOS a privacy-protected or
+  cloud-materialised folder looks exactly like that. A refusal (`EACCES`/`EPERM`) now keeps the row;
+  a genuinely broken link is still hidden.
+- **A stale commit could be shipped as if it were current.** `git add -A <list>` aborts on a single
+  nonexistent path, and it did - the first commit carrying `pi-web update` contained only the client
+  bundle, so the published canary named after it did not have the command (`unknown flag: --check`).
+  The install/update flow is now covered by the release gate it slipped through: the CLI name gate
+  sees `update` in a docs code block, `update.test.mts` pins the version comparison and the
+  prefix derivation, and `docs/CHECKS.md` records the live run of the real path.
+
 - **`pi-web update`, and the running build is now visible.** The gap this closes is not a missing
   release - CI publishes a canary to `@next` on every push to `main` - it is that nothing reinstalled
   the copy in a global npm prefix, so a browser could be pointed at a four-day-old UI with nothing on

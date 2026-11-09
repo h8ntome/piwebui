@@ -287,6 +287,10 @@ pi-web update             # npm-install the newest build of the tag you are on, 
 pi-web update --restart   # ...and restart it if it runs as a systemd user service
 ```
 
+One bootstrap caveat: `pi-web update` exists only in builds from `0.1.2-canary.22` onwards. An older
+install updates itself once, by hand — `npm i -g @piwebui/pi-web@next` (or `@latest`) — and from then
+on the command and the timer keep it current.
+
 `update` deliberately targets the npm prefix **that the running file was loaded from**, not whatever
 `npm prefix -g` happens to answer: a machine with two Node installs updates the one in use. A canary
 stays on `@next` and a release stays on `@latest` — an installed release is never silently replaced by
