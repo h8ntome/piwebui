@@ -1,0 +1,16 @@
+# One update attempt: install the newest build of the tag this install follows, and restart the
+# server if it changed. `pi-web update --restart` is a no-op when the systemd unit is missing.
+#
+#   install -Dm644 pi-web-update.service pi-web-update.timer ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now pi-web-update.timer
+#   systemctl --user start pi-web-update.service     # do it now, once
+#
+[Unit]
+Description=Update the installed pi-web build
+
+[Service]
+Type=oneshot
+Environment=HOME=%h
+Environment=PATH=%h/.local/bin:%h/.local/lib/node_modules/node/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=%h/.local/lib/node_modules/node/bin/pi-web update --restart

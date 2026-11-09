@@ -42,6 +42,12 @@ function highlight(text: string, needle: string): React.ReactNode {
   return <>{text.slice(0, i)}<mark className="pw-mark">{text.slice(i, i + q.length)}</mark>{text.slice(i + q.length)}</>;
 }
 
+/** A canary version is long; the chip shows what distinguishes it (0.1.2-canary.20.1e822e9 -> 0.1.2+20.1e822e9). */
+function shortBuild(version: string): string {
+  const canary = /^(\d+\.\d+\.\d+)-canary\.(\d+)\.([0-9a-f]+)/i.exec(version);
+  return canary ? `${canary[1]}+${canary[2]}.${canary[3]}` : version;
+}
+
 export function Sidebar({ onAddWorkspace, onOpenSettings, onNewSession, onRequestRename }: {
   onAddWorkspace: () => void;
   onOpenSettings: () => void;
@@ -199,6 +205,13 @@ export function Sidebar({ onAddWorkspace, onOpenSettings, onNewSession, onReques
               <span className="pw-side__brandMark"><PiMark /></span>
               <span className="pw-side__brandName">pi<span className="pw-side__brandBadge">WEB</span></span>
               {health?.pi?.resolvedVersion && <span className="pw-side__version">pi {health.pi.resolvedVersion}</span>}
+              {/* The build the browser is actually talking to. A stale install and a stale tab look
+                  identical from the outside, and they are not the same problem to fix. */}
+              {health?.version && (
+                <span className="pw-side__version" title={`pi-web ${health.version} · server ${health.serverId ?? "unknown"}`}>
+                  pi-web {shortBuild(health.version)}
+                </span>
+              )}
             </span>
           </button>
         </Tip>

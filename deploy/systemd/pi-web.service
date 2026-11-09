@@ -1,0 +1,26 @@
+# pi-web as a systemd user service: always up, so there is a server to update and restart.
+#
+#   install -Dm644 pi-web.service ~/.config/systemd/user/pi-web.service
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now pi-web.service
+#   loginctl enable-linger "$USER"        # keeps it running when you log out / over reboot
+#
+# Replace both paths with what `which pi-web` and `node -p process.execPath` say on your machine:
+# a prefix that is not on PATH (an nvm or a ~/.local/lib layout) is exactly how a box ends up
+# running an old build while a newer one is installed somewhere else.
+[Unit]
+Description=pi-web - browser UI for pi sessions
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Environment=HOME=%h
+Environment=PATH=%h/.local/bin:%h/.local/lib/node_modules/node/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PIWEB_NO_OPEN=1
+ExecStart=%h/.local/lib/node_modules/node/bin/pi-web serve --port 4319 --bind 127.0.0.1
+WorkingDirectory=%h
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target

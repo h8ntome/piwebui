@@ -11,6 +11,18 @@ releases are back-filled below — each release cut replaces the `Unreleased` se
 ## [Unreleased]
 
 ### Added
+- **`pi-web update`, and the running build is now visible.** The gap this closes is not a missing
+  release - CI publishes a canary to `@next` on every push to `main` - it is that nothing reinstalled
+  the copy in a global npm prefix, so a browser could be pointed at a four-day-old UI with nothing on
+  screen saying so. `pi-web update [--check|--tag|--restart|--json]` reads the registry, installs the
+  newest build of the tag the install already follows (canaries stay on `@next`, releases on
+  `@latest`), and targets the npm prefix **the running file was loaded from** rather than whatever
+  `npm prefix -g` answers, because a machine with two Node installs updates the one in use. Restart
+  stays a separate, explicit step (`--restart`, systemd user service only) because it drops live
+  controllable sessions. The sidebar now prints `pi-web <build>` next to `pi <version>`, and
+  `deploy/systemd/` ships the always-on server unit plus the daily update timer. README "Staying up
+  to date".
+
 
 - **The workspace folder selector now opens your own OS chooser when your own machine is the one
   running pi-web.** On macOS that is a Finder Open panel, on Windows the Explorer folder dialog, on a

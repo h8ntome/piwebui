@@ -140,7 +140,7 @@ interface Store {
   bootAttempts: number;
   /** The server stopped answering while the tab stayed open (SRV-05). */
   serverDown: boolean;
-  health: { version: string; pi: { resolvedVersion: string | null; tested: boolean }; managed: { active: number; limit: number } } | null;
+  health: { version: string; serverId?: string; pi: { resolvedVersion: string | null; tested: boolean }; managed: { active: number; limit: number } } | null;
   workspaces: WorkspaceInfo[];
   sessions: SessionListItem[];
   activeKey: string | null;

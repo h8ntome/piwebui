@@ -108,6 +108,9 @@ const HELP = `pi-web — local web UI for pi sessions (no login: open the URL an
   pi-web revoke-runtime <id>    drop and distrust a runtime now
   pi-web hidden                 list sessions deleted in pi-web (their files are still on disk)
   pi-web unhide <path>          put one of them back in the list
+  pi-web update [--check|--tag T|--restart|--json]
+                                install the newest published pi-web into this install's own npm
+                                prefix (@next for canaries, @latest for releases); --check only reports
   pi-web pair                   env line for bridging a pi on another host over an ssh tunnel
   pi-web deprecate-bridge       what changed in the bridge transport, and the cleanup command
 
@@ -140,7 +143,7 @@ Environment: PIWEB_PORT PIWEB_BIND PIWEB_DATA_DIR PIWEB_HOSTS_ALLOW PIWEB_ORIGIN
 const KNOWN_FLAGS = new Set([
   "port", "bind", "data-dir", "host-allow", "origins-allow", "agent-dir", "tls-cert", "tls-key",
   "open", "no-open", "name", "label", "id", "list", "help", "h", "version", "v", "V",
-  "bridge-mode", "bridge-socket", "no-attest", "json", "ttl",
+  "bridge-mode", "bridge-socket", "no-attest", "json", "ttl", "check", "tag", "restart",
 ]);
 
 /** Flag names in argv that this CLI does not know (\"--pot 5000\" would otherwise be ignored). */
@@ -732,6 +735,26 @@ export async function runCli(argv: string[] = process.argv.slice(2)): Promise<vo
     if (!d.ok) { console.error(`no usable descriptor at ${descriptorPath(cfg.dataDir)} (${d.reason}): start pi-web there first`); process.exit(1); }
     console.log(`PIWEB_BRIDGE_SOCKET=${d.descriptor.socket} PIWEB_BRIDGE_TOKEN=${d.descriptor.token} pi -e @piwebui/pi-web-bridge`);
     console.log(`# copy bridge.json to the other host (0600!) and forward ${d.descriptor.socket} over ssh -L/-R; ttl is until you rotate the token.`);
+  } else if (cmd === "update") {
+    const { formatUpdate, performUpdate } = await import("./update.ts");
+    const tag = typeof flags.tag === "string" ? flags.tag : undefined;
+    if (tag !== undefined && !/^[\w.-]{1,32}$/.test(tag)) {
+      console.error(`not a dist-tag: ${tag}`);
+      process.exitCode = 2;
+    } else {
+      try {
+        const report = await performUpdate({
+          check: Boolean(flags.check),
+          tag,
+          restart: Boolean(flags.restart),
+          json: Boolean(flags.json),
+        });
+        console.log(flags.json ? JSON.stringify(report) : formatUpdate(report));
+      } catch (error) {
+        console.error(`update failed: ${error instanceof Error ? error.message : String(error)}`);
+        process.exitCode = 1;
+      }
+    }
   } else if (cmd === "doctor") {
     const { runDoctor } = await import("./doctor.ts");
     process.exitCode = await runDoctor({ dataDir: cfg.dataDir, json: Boolean(flags.json) });

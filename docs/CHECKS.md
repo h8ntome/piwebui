@@ -163,3 +163,20 @@ with `/tmp/fakebin/zenity` standing in for a desktop chooser (2 s "human" delay,
 - `npm run smoke`: **38/38** (new rows `S28`–`S30`); `npm run test:unit`: 143 tests (22 of them the new chooser/routing suite, 5 the device claim); `tsc` clean on all
   four projects; `npm run check:cli` green after the README/SECURITY/CHANGELOG updates.
 
+**Dated 2026-11-09 — install freshness (`pi-web update`, version badge).** The failure being closed was
+operational, not code: the global install on this box was `@piwebui/pi-web@0.1.0` (4 days old) while
+`@latest`/`@next` had moved, and nothing on screen said which build a tab was talking to.
+
+- `npm i -g @piwebui/pi-web@next` → `pi-web --version` = `0.1.2-canary.20.1e822e9`, and that installed
+  tree contains the picker work (`dist/nativePicker.js` present, `routes.js` registers `browse/mode`
+  and `browse/pick`, the client bundle carries the chooser copy) ✔
+- `pi-web update --check` (no install) and `pi-web update` (idempotent on the newest build) ✔;
+  `--json` shape asserted by unit tests; a checkout is refused rather than overwritten ✔
+- Prefix derivation is path-based, not `npm prefix -g`: this box has two Node installs
+  (`~/.local/lib/node_modules/node` and `~/.npm-global`), and the updater must touch the one running ✔
+- `systemctl --user enable --now pi-web.service pi-web-update.timer`: service active, health answers
+  `{"version":"0.1.2-canary.20.1e822e9"}`, timer armed (`list-timers`), linger `yes` so both survive
+  logout ✔
+- `pi-web update` unit tests: canary ordering (`canary.2 < canary.10`, release > its own canaries),
+  tag defaulting, plan text for registry-unreachable, check-never-installs, install-targets-own-prefix ✔
+

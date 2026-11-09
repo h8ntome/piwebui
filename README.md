@@ -264,12 +264,49 @@ pi-web install-bridge                      # deprecated alias of install-extensi
 pi-web rotate-bridge-token                 # new bridge secret + descriptor rewrite
 pi-web trust-runtime <id> | revoke-runtime <id>
 pi-web pair                                # env line for bridging a pi on another host over ssh -L
+pi-web update [--check] [--tag next|latest] [--restart] [--json]
+                                           # install the newest published build into this install's
+                                           # own npm prefix (@next for canaries, @latest for releases)
 pi-web help | --version                  # usage / version
 ```
 
 `piweb` is kept as a compatibility alias for every command, so older notes and scripts keep working.
 It is also the fallback when something else already owns `pi-web` in your npm global prefix (see
 the install note above).
+
+## Staying up to date
+
+Every push to `main` publishes a canary build to the `next` dist-tag; a git tag publishes a release
+to `latest`. Nothing on your machine updates itself until you say so, and the version you are looking
+at is now printed in the sidebar (`pi-web 0.1.2+21.1a2b3c4`) and by `pi-web --version`, so a stale
+install cannot hide behind a browser tab.
+
+```bash
+pi-web update --check     # what would change, changing nothing
+pi-web update             # npm-install the newest build of the tag you are on, into this install's prefix
+pi-web update --restart   # ...and restart it if it runs as a systemd user service
+```
+
+`update` deliberately targets the npm prefix **that the running file was loaded from**, not whatever
+`npm prefix -g` happens to answer: a machine with two Node installs updates the one in use. A canary
+stays on `@next` and a release stays on `@latest` — an installed release is never silently replaced by
+a bleeding-edge canary. Restarting is a separate decision, because a restart drops live controllable
+sessions: do it yourself, or let the service do it (`--restart`).
+
+To have a machine do it on a schedule, run the same command from a systemd user service (`loginctl
+show-user "$USER" --value Linger` must be `yes` for it to survive logout):
+
+```ini
+# ~/.config/systemd/user/pi-web-update.service  (with pi-web-update.timer: OnCalendar=*-*-* 04:40:00,
+# Persistent=true, and `systemctl --user enable --now pi-web-update.timer`)
+[Service]
+Type=oneshot
+ExecStart=pi-web update --restart
+```
+
+Running pi-web itself as a user service (so there is always a server to update and restart) is the
+same idea: `pi-web serve --port 4319 --bind 127.0.0.1` in a `pi-web.service` unit with
+`Restart=always`.
 
 ## Security
 

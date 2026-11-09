@@ -1,0 +1,12 @@
+# Daily, a little randomised so a fleet of machines does not hit the registry in lockstep.
+# Persistent=true means a machine that was off at 04:40 catches up on boot.
+[Unit]
+Description=Daily pi-web update check
+
+[Timer]
+OnCalendar=*-*-* 04:40:00
+RandomizedDelaySec=45m
+Persistent=true
+
+[Install]
+WantedBy=timers.target
