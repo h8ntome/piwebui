@@ -175,6 +175,16 @@
 .pw-dialog:focus { outline: none; }
 .pw-dialog--wide { width: min(760px, 100%); }
 .pw-dialog--medium { width: min(560px, 100%); }
+/* The folder picker is a fixed canvas in the reference (680x500), clamped so a short or
+   narrow window still gets the whole dialog: the Miller row scrolls sideways and each
+   column scrolls down, which is what makes deep paths reachable on a phone. */
+.pw-dialog--picker {
+  width: min(680px, 100%);
+  height: min(500px, calc(100dvh - 32px));
+  max-height: calc(100dvh - 32px);
+  gap: 0;
+  padding-bottom: 0;
+}
 .pw-dialog__header {
   display: flex;
   align-items: center;
@@ -216,6 +226,120 @@
   gap: 8px;
   padding: 0 24px;
 }
+
+/* ------------------------- workspace folder picker -------------------------
+   Metrics ported from the reference dialog's stylesheet (the shipped MIT-licensed
+   bundle), so the three OSes get one look instead of one per platform. */
+/* The reference splits the dialog into header (title) / crumb row / panes / footer bar,
+   each hairline-separated; the title and the crumb row together are its header block,
+   so the rule sits under the crumbs rather than under the title. */
+.pw-dialog--picker .pw-dialog__header { padding: 16px 14px 0 24px; }
+.pw-dialog--picker .pw-dialog__title { min-height: 28px; font-weight: 510; }
+.pw-dialog--picker .pw-dialog__body { flex: 1 1 0; min-height: 0; overflow: hidden; padding: 0; }
+.pw-dialog--picker .pw-dialog__footer {
+  border-top: var(--pw-hairline, .5px) solid var(--dsw-alias-border-l3);
+  align-items: center;
+  flex-wrap: wrap;
+  flex: none;
+  gap: 8px;
+  padding: 16px 24px;
+}
+.pw-dirpick { display: flex; flex-direction: column; flex: 1 1 0; min-height: 0; }
+
+/* breadcrumb + click-to-edit path zone */
+.pw-dirpick__head {
+  border-bottom: var(--pw-hairline, .5px) solid var(--dsw-alias-border-l3);
+  align-items: center;
+  flex: none;
+  padding: 8px 14px 8px 24px;
+  display: flex;
+}
+.pw-dirpick__crumbBar {
+  box-sizing: border-box;
+  border: 1px solid #0000;
+  border-radius: var(--dsw-radius-sm);
+  align-items: center;
+  gap: 4px;
+  min-height: 24px;
+  margin-left: -9px;
+  padding: 0 8px;
+  display: flex;
+  flex: 1 1 0;
+  min-width: 0;
+}
+.pw-dirpick__crumbBar:has(.pw-dirpick__crumbEditZone:focus-visible),
+.pw-dirpick__crumbBar:has(.pw-dirpick__pathInput) { border-color: var(--dsw-alias-border-l2); }
+@media (hover: hover) {
+  .pw-dirpick__crumbBar:has(.pw-dirpick__crumbEditZone:enabled:hover) { border-color: var(--dsw-alias-border-l2); }
+}
+.pw-dirpick__crumbTrail { scrollbar-width: none; flex: 0 auto; align-items: center; gap: 4px; min-width: 0; display: flex; overflow-x: auto; }
+.pw-dirpick__crumbSeat { flex: none; align-items: center; gap: 4px; min-width: 0; display: inline-flex; }
+.pw-dirpick__crumb {
+  text-overflow: ellipsis; white-space: nowrap; max-width: 160px; overflow: hidden;
+  color: var(--dsw-alias-label-tertiary); cursor: pointer; background: none; border: none;
+  padding: 0; font: inherit; font-size: 13px; font-weight: 500; line-height: 20px;
+}
+.pw-dirpick__crumb:focus-visible { outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary)); outline-offset: -2px; }
+@media (hover: hover) { .pw-dirpick__crumb:hover { color: var(--dsw-alias-label-primary); } }
+.pw-dirpick__crumbChevron { color: var(--dsw-alias-label-tertiary); flex: none; }
+.pw-dirpick__crumbEditZone {
+  cursor: text; background: none; border: none; outline: none; flex: 1 0 34px;
+  justify-content: flex-end; align-items: center; min-width: 34px; height: 22px; padding: 0; display: flex;
+}
+.pw-dirpick__crumbEditGlyph { color: var(--dsw-alias-label-tertiary); flex: none; }
+.pw-dirpick__crumbEditZone:focus-visible .pw-dirpick__crumbEditGlyph { color: var(--dsw-alias-label-primary); }
+@media (hover: hover) { .pw-dirpick__crumbEditZone:enabled:hover .pw-dirpick__crumbEditGlyph { color: var(--dsw-alias-label-primary); } }
+.pw-dirpick__crumbEditZone:disabled { cursor: default; }
+.pw-dirpick__crumbEditZone:disabled .pw-dirpick__crumbEditGlyph { color: var(--dsw-alias-label-caption); }
+.pw-dirpick__pathInput {
+  box-sizing: border-box; min-width: 0; height: 22px; color: var(--dsw-alias-label-primary);
+  background: none; border: none; outline: none; flex: 1 1 0; padding: 0; font: inherit;
+  font-size: 13px; line-height: 20px;
+}
+
+/* the Miller view: one level, or level | selected folder's children */
+.pw-dirpick__content { flex-direction: column; flex: 1 1 0; min-height: 0; padding: 16px 16px 16px 24px; display: flex; position: relative; }
+.pw-dirpick__millerRow { scrollbar-width: none; flex: 1 1 0; align-items: stretch; gap: 12px; min-height: 0; display: flex; overflow-x: auto; }
+.pw-dirpick__column { flex-direction: column; flex: 1 1 0; gap: 2px; min-width: 256px; padding-right: 8px; display: flex; overflow-y: auto; }
+.pw-dirpick__divider { background: var(--dsw-alias-border-l3); flex: none; width: .5px; }
+.pw-dirpick__rowSeat { flex: none; display: flex; }
+.pw-dirpick__row {
+  border-radius: var(--dsw-radius-sm); text-align: left; cursor: pointer; background: none; border: none;
+  flex: none; align-items: center; gap: 4px; width: 100%; height: 28px; padding: 4px; display: flex;
+  color: inherit; font: inherit;
+}
+.pw-dirpick__row:focus-visible { outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary)); outline-offset: -2px; }
+@media (hover: hover) { .pw-dirpick__row:hover { background: var(--dsw-alias-interactive-bg-hover); } }
+.pw-dirpick__row--selected { background: var(--dsw-alias-interactive-bg-active, var(--dsw-alias-interactive-bg-hover)); }
+@media (hover: hover) { .pw-dirpick__row--selected:hover { background: var(--dsw-alias-interactive-bg-active, var(--dsw-alias-interactive-bg-hover)); } }
+.pw-dirpick__rowName {
+  text-overflow: ellipsis; white-space: nowrap; min-width: 0; overflow: hidden;
+  color: var(--dsw-alias-label-primary); flex: 1 1 0; font-size: 13px; font-weight: 500; line-height: 20px;
+}
+.pw-dirpick__rowChevron { color: var(--dsw-alias-label-tertiary); flex: none; }
+.pw-dirpick__empty { color: var(--dsw-alias-label-caption); padding: 4px; font-size: 13px; line-height: 20px; }
+
+/* status, loading pill, error */
+.pw-dirpick__status, .pw-dirpick__error { padding: 4px 120px 4px 4px; font-size: 12px; line-height: 18px; }
+.pw-dirpick__status { color: var(--dsw-alias-label-secondary); }
+.pw-dirpick__error { color: var(--dsw-alias-state-error-primary); overflow-wrap: anywhere; }
+.pw-dirpick__loadingFloat { background: var(--dsw-alias-bg-layer-2); padding: 2px 8px; position: absolute; bottom: 8px; right: 16px; }
+
+/* footer controls */
+.pw-dirpick__showHidden {
+  color: var(--dsw-alias-label-secondary); cursor: pointer; white-space: nowrap; background: none; border: none;
+  align-items: center; gap: 4px; padding: 0; font: inherit; font-size: 13px; font-weight: 500; line-height: 20px;
+  display: inline-flex;
+}
+@media (hover: hover) { .pw-dirpick__showHidden:hover { color: var(--dsw-alias-label-primary); } }
+.pw-dirpick__showHidden:disabled { color: var(--dsw-alias-label-caption); cursor: default; }
+.pw-dirpick__showHidden--on { color: var(--dsw-alias-label-primary); }
+.pw-dirpick__footerGap { flex: 1 1 0; }
+.pw-dirpick__action { min-width: 72px; }
+
+/* the nested "New folder" prompt */
+.pw-dirpick__create { display: flex; flex-direction: column; gap: 12px; padding-bottom: 4px; }
+.pw-dirpick__createIn { color: var(--dsw-alias-label-primary); margin: 0; font-size: 14px; line-height: 22px; }
 @keyframes pw-fade-in { from { opacity: 0; } }
 @keyframes pw-modal-enter { from { opacity: 0; transform: scale(.98) translateY(4px); } }
 

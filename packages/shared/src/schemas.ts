@@ -90,6 +90,12 @@ export const AddWorkspaceSchema = Type.Object({
   label: Type.Optional(Type.String({ maxLength: 120 })),
 });
 
+/** One "New folder" in the workspace directory picker: a parent level plus a single-segment name. */
+export const CreateDirectorySchema = Type.Object({
+  path: Type.String({ minLength: 1, maxLength: 4096 }),
+  name: Type.String({ minLength: 1, maxLength: 255 }),
+});
+
 export const ControlActionSchema = Type.Object({
   action: Type.Union([Type.Literal("acquire"), Type.Literal("renew"), Type.Literal("release")]),
   controllerId: Type.String({ minLength: 8, maxLength: 64 }),

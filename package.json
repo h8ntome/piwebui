@@ -30,7 +30,7 @@
     "stage:bridge": "tsx scripts/stage-bridge-extension.mts",
     "package:smoke": "tsx scripts/package-smoke.ts",
     "smoke": "tsx e2e/server-smoke.mts",
-    "test:unit": "tsx --test packages/shared/test/unit.test.mts packages/pi-adapter/test/framing.test.mts packages/pi-extension/test/*.test.mts scripts/test/*.test.mts",
+    "test:unit": "tsx --test packages/shared/test/unit.test.mts packages/pi-adapter/test/framing.test.mts packages/pi-extension/test/*.test.mts packages/server/test/*.test.mts packages/client/test/*.test.mts scripts/test/*.test.mts",
     "p0:matrix": "tsx e2e/p0-capability-matrix.ts --write",
     "smoke:audit": "tsx e2e/audit-surface.mts"
   },

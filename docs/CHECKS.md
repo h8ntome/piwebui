@@ -39,7 +39,13 @@ Boot, auth (exchange/CSRF/host checks), workspace allowlist, meta/capabilities, 
 create, SSE snapshot-on-subscribe, control grants, idempotent command dispatch, live phase
 transitions over SSE, persistence-by-pi, static client serving, reconnect Last-Event-ID behavior,
 **four concurrent independent managed sessions** prompted in parallel, replayed idempotency keys,
-pure-read stats. See script for exact assertions S1–S20.
+pure-read stats, and the **workspace folder picker** (`S21`–`S27`: level listing shape, host paths and
+hidden flags, root-to-target crumbs, home default, `invalid_request` on a relative path,
+`directory_unreadable` instead of a raw node error, `New folder` create, `directory_exists`, single-segment
+name refusal, CSRF on the create). See script for exact assertions S1–S27.
+
+**Recorded 2026-11-09 (`npm run smoke`): 33/33 passed, 0 skipped**, on devbox (Linux, node 24, pi 1.5.0),
+after the folder-picker rebuild.
 
 **Status note (dated 2026-11-05/06):** full run completes with **0 failures** (S1–S8b–S20; last recorded 13/22 pass, 9 skip, rc=0). The skipped rows are exclusively live-managed-host assertions starved by a machine-wide I/O storm that began ~16:45 on 2026-11-05 and persisted >12h: macOS `fileproviderd` sustained 90–220% CPU, `socketfilterfw` scanned every new node exec (`readFileSync` → ETIMEDOUT), cold process loads took 10–40 min at <1s CPU each. The same host-lifecycle behaviors (prompt ack, streaming previews, queue, dialogs, four-host capacity, handoff) pass under `p0:verify` section B, which completed on this machine before the storm. The orchestrator keeps re-running the smoke when windows open (`/tmp/orch2.sh` → `/tmp/smokeE.log`); SKIP rows become PASS whenever a host can load inside its 10-minute window.
 
@@ -47,6 +53,19 @@ pure-read stats. See script for exact assertions S1–S20.
 
 - `tsc` clean on shared, pi-adapter, server, client (strict; exactOptionalPropertyTypes).
 - okhsl conversion vendored from pi's MIT Oklab math; parity-checked against pi theme JSON.
+- **Folder picker rules (`packages/server/test/directories.test.mts`,
+  `packages/client/test/directories.test.mts`, both under `npm run test:unit`).** The server suite pins
+  the per-platform path rules from any host — `fullyQualified` on linux/darwin/win32 (including the Windows
+  forms the reference refuses: `C:x`, `/foo`, `\\server`), `parentOf` up to `/` and up to "This PC",
+  `ancestryCrumbs` labelling, the bounded insertion window, and real listings (directories only, sorted,
+  hidden flagged, symlinks offered under their own name rather than `realpath`'d, `directory_unreadable`
+  instead of a raw node code, single-segment create refusal, `directory_exists`, the macOS privacy copy).
+  The client suite pins what the panes show: separator inference from the host's home path, draft→directory
+  reading on both separator styles, breadcrumb folding at Home, and the hidden/prefix filter rules.
+- Cross-OS check that does not need a Windows or macOS machine: the pure rules above are platform-parameterised,
+  and `npx tsx e2e/lib/picker-platform-stub.mts <port> <win32|darwin> <upstream>` serves the real client a
+  simulated host so the dialog can be driven through a Windows tree (drives, `D:\`, "This PC") or a macOS
+  tree with TCC-denied folders. See `docs/research/directory-picker.md`.
 
 ## Automated — release and registry gates
 

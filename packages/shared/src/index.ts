@@ -2,7 +2,7 @@ export * from "./constants.ts";
 export * from "./types.ts";
 export * from "./frames.ts";
 export * from "./bridge-protocol.ts";
-export { validate, validateQuery, exceedsDepth, CommandEnvelopeSchema, CreateSessionSchema, AddWorkspaceSchema, ControlActionSchema, ListSessionsQuerySchema, EntriesQuerySchema, FilesQuerySchema, RawQuerySchema, ControlGrantBodySchema } from "./schemas.ts";
+export { validate, validateQuery, exceedsDepth, CommandEnvelopeSchema, CreateSessionSchema, AddWorkspaceSchema, ControlActionSchema, ListSessionsQuerySchema, EntriesQuerySchema, FilesQuerySchema, RawQuerySchema, ControlGrantBodySchema, CreateDirectorySchema } from "./schemas.ts";
 export { parseOkhsl, rgbToHex, hexToRgb, contrastRatio, relLuminance, okhslToRgb } from "./okhsl.ts";
 
 /** Canonical JSON stringify (sorted keys) used for operation payload hashes. */

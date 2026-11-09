@@ -31,7 +31,7 @@ async function request<T>(path: string, init: RequestInit = {}, idempotencyKey?:
 }
 
 export const api = {
-  get: <T,>(path: string) => request<T>(path),
+  get: <T,>(path: string, init?: RequestInit) => request<T>(path, init ?? {}),
   post: <T,>(path: string, body?: unknown, idem?: string) =>
     request<T>(path, { method: "POST", body: body === undefined ? null : JSON.stringify(body) }, idem),
   del: <T,>(path: string) => request<T>(path, { method: "DELETE" }),

@@ -110,7 +110,13 @@ export type ErrorCode =
   | "unsupported_capability"
   | "pi_command_failed"
   | "host_unavailable"
-  | "timeout";
+  | "timeout"
+  /** The folder picker could not list a level (missing, not a directory, or the OS refused access). */
+  | "directory_unreadable"
+  /** The folder picker was asked to create a directory that is already there. */
+  | "directory_exists"
+  /** The folder picker's create failed for a reason the operator cannot fix from the dialog. */
+  | "directory_create_failed";
 
 export const ERROR_HTTP_STATUS: Record<ErrorCode, number> = {
   invalid_request: 400,
@@ -129,6 +135,9 @@ export const ERROR_HTTP_STATUS: Record<ErrorCode, number> = {
   pi_command_failed: 502,
   host_unavailable: 503,
   timeout: 504,
+  directory_unreadable: 400,
+  directory_exists: 409,
+  directory_create_failed: 400,
 };
 
 /** Requests one principal may make per minute before the API answers 429 (see Auth.rateOk). */

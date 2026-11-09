@@ -54,6 +54,11 @@ Allow the project directories whose sessions you want visible — nothing is sca
 pi-web allow /absolute/path/to/your/project
 ```
 
+Or click **Add a workspace folder** in the sidebar and browse for it: the picker is an in-app folder
+browser (breadcrumb, two-pane drill-down, "New folder", a path field you can type into) served by the
+server, so it behaves the same whatever the host OS is — `/` on Linux, `/Users/you` on macOS, and
+`C:\`\, `D:\`\ and UNC shares on Windows.
+
 Working from a checkout instead:
 
 ```bash

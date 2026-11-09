@@ -307,6 +307,66 @@ if (ready) {
   check("S20 stats via pure read worker", typeof stats.totalEntries === "number" || stats.error?.code === "not_found", JSON.stringify(stats).slice(0, 120));
 }
 
+/* --- S21..S27: the workspace folder picker (GET/POST /api/v1/browse) ---
+   The dialog is the only way in to the workspace allowlist, and it has to answer the same
+   way on Linux, macOS and Windows: fully qualified host paths in, closed error codes out. */
+{
+  const pickRoot = path.join(tmp, "pickroot");
+  fs.mkdirSync(path.join(pickRoot, "Alpha", "inner"), { recursive: true });
+  fs.mkdirSync(path.join(pickRoot, ".hidden"), { recursive: true });
+  fs.writeFileSync(path.join(pickRoot, "note.txt"), "not a folder");
+
+  const listed = await (await fetch(`${BASE}/api/v1/browse?path=${encodeURIComponent(pickRoot)}`, { headers: H })).json() as {
+    path: string; home: string; parent: string | null; truncated: boolean;
+    crumbs: { name: string; path: string }[]; entries: { name: string; path: string; hidden: boolean }[];
+  };
+  const pickRootReal = path.resolve(pickRoot);
+  check("S21 picker lists folders only, as host paths, with hidden flagged",
+    listed.path === pickRootReal
+      && listed.entries.map((e) => e.name).join(",") === ".hidden,Alpha"
+      && listed.entries.every((e) => path.isAbsolute(e.path))
+      && listed.entries.find((e) => e.name === ".hidden")?.hidden === true
+      && listed.entries.find((e) => e.name === "Alpha")?.hidden === false
+      && listed.truncated === false, JSON.stringify(listed.entries));
+  const topCrumb = process.platform === "win32" ? "::This PC" : path.parse(pickRootReal).root;
+  check("S21b picker returns the ancestry root-to-target, so crumbs need no client-side joining",
+    listed.crumbs[0].path === topCrumb
+      && listed.crumbs.at(-1)?.path === listed.path
+      && listed.parent === path.dirname(listed.path), JSON.stringify(listed.crumbs.map((c) => c.path)));
+
+  const homeLevel = await (await fetch(`${BASE}/api/v1/browse`, { headers: H })).json() as { path: string; home: string };
+  check("S22 no path browses the host home", homeLevel.path === path.resolve(os.homedir()) && homeLevel.home === os.homedir(), JSON.stringify(homeLevel).slice(0, 100));
+
+  const relative = await fetch(`${BASE}/api/v1/browse?path=relative%2Fpath`, { headers: H });
+  const relativeBody = await relative.json() as { error?: { code?: string } };
+  check("S23 a relative path is refused as invalid_request", relative.status === 400 && relativeBody.error?.code === "invalid_request", `${relative.status} ${JSON.stringify(relativeBody).slice(0, 90)}`);
+
+  const unreadable = await fetch(`${BASE}/api/v1/browse?path=${encodeURIComponent(path.join(pickRoot, "gone"))}`, { headers: H });
+  const unreadableBody = await unreadable.json() as { error?: { code?: string; message?: string } };
+  check("S24 an unopenable folder answers directory_unreadable, not a raw node error",
+    unreadable.status === 400 && unreadableBody.error?.code === "directory_unreadable"
+      && !/^E[A-Z]+:/.test(unreadableBody.error?.message ?? ""), `${unreadable.status} ${JSON.stringify(unreadableBody).slice(0, 110)}`);
+
+  const created = await fetch(`${BASE}/api/v1/browse`, { method: "POST", headers: H, body: JSON.stringify({ path: pickRoot, name: "New Project" }) });
+  const createdBody = await created.json() as { path?: string };
+  check("S25 New folder creates exactly one child and returns its path",
+    created.status === 200 && createdBody.path === path.join(pickRootReal, "New Project")
+      && fs.existsSync(path.join(pickRoot, "New Project")), `${created.status} ${JSON.stringify(createdBody).slice(0, 110)}`);
+
+  const conflict = await fetch(`${BASE}/api/v1/browse`, { method: "POST", headers: H, body: JSON.stringify({ path: pickRoot, name: "New Project" }) });
+  const conflictBody = await conflict.json() as { error?: { code?: string } };
+  check("S25b creating over an existing folder answers directory_exists", conflict.status === 409 && conflictBody.error?.code === "directory_exists", `${conflict.status} ${JSON.stringify(conflictBody).slice(0, 90)}`);
+
+  for (const [name, label] of [["a/b", "S26 a name with a separator is refused"], ["  ", "S26b a blank name is refused"]] as const) {
+    const bad = await fetch(`${BASE}/api/v1/browse`, { method: "POST", headers: H, body: JSON.stringify({ path: pickRoot, name }) });
+    const badBody = await bad.json() as { error?: { code?: string } };
+    check(label, bad.status === 400 && badBody.error?.code === "invalid_request", `${bad.status} ${JSON.stringify(badBody).slice(0, 90)}`);
+  }
+
+  const noCsrfCreate = await fetch(`${BASE}/api/v1/browse`, { method: "POST", headers: { cookie, "content-type": "application/json", origin: BASE }, body: JSON.stringify({ path: pickRoot, name: "nope" }) });
+  check("S27 New folder without the csrf token is refused", noCsrfCreate.status === 403 && !fs.existsSync(path.join(pickRoot, "nope")), String(noCsrfCreate.status));
+}
+
 try { await reader.cancel(); } catch { /* ignore */ }
 finish();
 

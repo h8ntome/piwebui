@@ -59,6 +59,25 @@ releases are back-filled below — each release cut replaces the `Unreleased` se
 
 ### Changed
 
+- **The workspace folder selector is the reference's in-app browser, and it behaves the same on Linux,
+  macOS and Windows.** `GET /api/v1/browse` used to answer `{ path, parent, home, entries[] }` with the
+  level's own path (`realpath`'d) while the *browser* did the path arithmetic: child rows were joined as
+  `level + "/" + name` and breadcrumbs were rebuilt by splitting on `"/"`. That is Linux/macOS arithmetic,
+  not Windows arithmetic (`C:\Users\you`, drive roots, UNC shares), and it made the dialog disagree with
+  itself about where it was. The host now answers the reference's shape — `crumbs` root-to-target,
+  `{ name, path, hidden }` rows with fully qualified host paths, a directories-only bounded window, and
+  `directory_unreadable` / `directory_exists` / `directory_create_failed` codes — and the browser only ever
+  echoes a path back. `POST /api/v1/browse { path, name }` is new: the dialog's "New folder" button, one
+  `mkdir`, one path segment, behind the same CSRF/Origin fences as every other mutation. The contained
+  workspace file viewer stays in `packages/server/src/files.ts`; the picker moved to
+  `packages/server/src/directories.ts`. The dialog itself is the reference's Miller view (680×500; one
+  column until you pick a row, then two around a hairline divider; a click-to-edit path seeded with a
+  trailing separator that prefix-filters the last pane as you type; a `Loading…` pill that only appears
+  after 300 ms of silence; `New folder` → `Show hidden files` → `Cancel` / `Open`), served by the `browse`
+  interaction rather than a native OS chooser because pi-web's server is often not the machine you are
+  looking at. The reference contract, the per-platform matrix and how to re-verify are in
+  `docs/research/directory-picker.md`.
+
 - **Install commands name their dist-tag.** `npm install -g @piwebui/pi-web@latest` and
   `pi install npm:@piwebui/pi-web-bridge@latest` in the README and the bridge's own docs. npm already
   defaults to `latest`, so nothing resolves differently; what changes is that a pasted command states
@@ -166,6 +185,32 @@ releases are back-filled below — each release cut replaces the `Unreleased` se
   re-rendered around the new still. `docs/DEMO_CAPTURE.md` §0 records how both are reproduced.
 
 ### Fixed
+
+- **macOS: the folder a user clicked could not be opened, and the reason was unreadable.** `readdir` on
+  `~/Documents`, `~/Desktop`, `~/Downloads` and friends answers `EPERM` until the app that launched the
+  server is granted Files and Folders, and the picker answered that with a `500 {"code":"EACCES"}` and a
+  toast quoting node. An unopenable level now answers `directory_unreadable` (400) with the reason, the
+  dialog shows it in its own alert strip, and a denial that looks like macOS privacy says so and names the
+  setting. Choosing that folder still works — listing it is not required to add it — and the selection
+  survives the failed listing instead of silently falling back to the parent you never clicked.
+- **macOS: browsing a symlink no longer teleports you.** The picker canonicalised every level, so
+  `/tmp/x` came back as `/private/tmp/x` and an iCloud-redirected or symlinked folder registered a
+  workspace under a path nobody typed. The host resolves and never canonicalises now, and a symlink to a
+  directory is offered under its own name.
+- **Windows: separators, roots and labels.** Paths are built with the host's own path module (never string
+  concatenation), `C:x` and `/foo` are refused as not fully qualified the way the reference refuses them,
+  a drive root's parent is a "This PC" level listing the drives that answer within 250 ms (on POSIX
+  pressing up reaches `/`; a drive root has no parent, so `D:\` was otherwise unclickable), and the
+  workspace label stops being the entire path now that `basename()` knows `\`.
+- **A folder full of files could hide every folder in it.** Files were listed, then filtered out client
+  side, and counted toward the 2000-entry slice — so a mostly-files directory could show "no folders" and
+  still claim the listing was complete. Directories only now, bounded at 1000 name-sorted rows, and a cut
+  is announced (`Too many folders to list; only the beginning is shown.`).
+- **Dialogs stole focus mid-task.** `Dialog` re-armed its autofocus timer whenever the parent re-rendered
+  (which is constantly while the picker is open) and its selector matched the first button in document
+  order, i.e. the close `✕`. The effect now runs once per dialog and prefers `[data-autofocus]`.
+- **Escaping a nested dialog escaped the outer one too.** The picker's "New folder" prompt is modal over
+  the picker; the picker now ignores its own dismissal while that prompt, or an in-flight pick, holds it.
 
 - **A fresh `npm i -g @piwebui/pi-web@latest` could not list chats, open a project, or start a browser
   chat** — the three things the README tells you to do first. The published server resolved the pure

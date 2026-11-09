@@ -9,6 +9,7 @@ import {
   API_RATE_PER_MINUTE,
   CommandEnvelopeSchema,
   ControlActionSchema,
+  CreateDirectorySchema,
   CreateSessionSchema,
   ENTRIES_PAGE_DEFAULT,
   ENTRIES_PAGE_MAX,
@@ -39,7 +40,8 @@ import type { ControlGrants } from "./control.ts";
 import type { Operations } from "./operations.ts";
 import { ApiError, shellEscape, type CommandDispatcher } from "./commands.ts";
 import { discoverThemes } from "./themes.ts";
-import { viewFile, browseDir } from "./files.ts";
+import { viewFile } from "./files.ts";
+import { listDirectory, createDirectory } from "./directories.ts";
 import type { BridgeDiscovery } from "./drivers.ts";
 import type { BridgeServer } from "./bridgeServer.ts";
 import type { BridgeWire } from "./bridgeWire.ts";
@@ -615,11 +617,19 @@ export function registerRoutes(app: FastifyInstance, ctx: AppCtx) {
     return viewFile(ws.path, q.path);
   });
 
-  /* Names-only directory listing for the "select workspace directory" picker. */
+  /* Names-only directory listing for the "select workspace directory" picker, and the
+     "New folder" verb that dialog offers. Both speak fully qualified HOST paths: the browser
+     never joins path segments, which is what kept this picker honest on Windows as well as
+     Linux and macOS (see directories.ts). */
   app.get("/api/v1/browse", async (req) => {
     principal(req);
     const q = (req.query ?? {}) as { path?: string };
-    return browseDir(q.path ?? "");
+    return listDirectory(q.path ?? "");
+  });
+  app.post("/api/v1/browse", async (req) => {
+    principal(req);
+    const input = body<{ path: string; name: string }>(req, CreateDirectorySchema);
+    return { path: await createDirectory(input.path, input.name) };
   });
 
   /* ---------------- SSE ---------------- */

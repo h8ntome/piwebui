@@ -10,6 +10,7 @@ import { SettingsDialog } from "./features/SettingsDialog";
 import { DirectoryPicker, PromptDialog } from "./features/DirectoryPicker";
 import { Toasts, toast } from "./ui/Toast";
 import { Icon } from "./lib/icons";
+import { basename } from "./lib/format";
 
 function BootScreen({ error, onRetry, attempts }: { error: string; onRetry: () => void; attempts: number }) {
   return (
@@ -238,11 +239,11 @@ export function App() {
         <DirectoryPicker
           onClose={() => setPicker(null)}
           onPick={async (path) => {
-            const key = await addWorkspace(path, basenameOf(path));
+            const key = await addWorkspace(path, basename(path));
             setPicker(null);
             if (key) {
               // A workspace with no sessions still has to be usable from the toast (WS-01).
-              toast.warn(`Workspace ${basenameOf(path)} added · ${path}`, { label: "New session here", run: () => void newSession(key) });
+              toast.warn(`Workspace ${basename(path)} added · ${path}`, { label: "New session here", run: () => void newSession(key) });
             }
           }}
         />
@@ -284,11 +285,6 @@ function renameInitialHint(v?: { runtime?: { sessionName?: string | null } | nul
   if (v?.runtime?.sessionName || v?.meta?.name?.trim()) return undefined;
   if (v?.meta?.firstPrompt) return "The title you see now comes from your first message. Naming it here replaces that.";
   return "This session has no title yet.";
-}
-
-function basenameOf(p: string) {
-  const parts = p.split("/").filter(Boolean);
-  return parts[parts.length - 1] ?? p;
 }
 
 /** Drag the panel edge instead of walking a stepper 17 times (PNL-06). */

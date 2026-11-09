@@ -8,25 +8,33 @@ export function Dialog({ title, description, children, footer, size = "sm", onCl
   description?: ReactNode;
   children?: ReactNode;
   footer?: ReactNode;
-  size?: "sm" | "medium" | "wide";
+  size?: "sm" | "medium" | "wide" | "picker";
   onClose: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  // The dismissal handler is a fresh closure on most parent renders, so the key listener holds
+  // the latest one in a ref and the effect itself runs exactly once per dialog: re-arming it on
+  // every parent render used to yank focus back to the first button mid-task (and re-run the
+  // autofocus timer, which is how a keyboard user lost the folder picker's path field).
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); onClose(); } };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); closeRef.current(); } };
     window.addEventListener("keydown", onKey, true);
     const t = window.setTimeout(() => {
-      const el = ref.current?.querySelector<HTMLElement>("[data-autofocus],input,textarea,button");
+      const host = ref.current;
+      if (!host) return;
+      const el = host.querySelector<HTMLElement>("[data-autofocus]") ?? host.querySelector<HTMLElement>("input,textarea,button");
       el?.focus();
     }, 30);
     return () => { window.removeEventListener("keydown", onKey, true); window.clearTimeout(t); };
-  }, [onClose]);
+  }, []);
 
   return (
     <Portal layer="dialog">
       <div className="pw-modalRoot" role="dialog" aria-modal="true" aria-label={typeof title === "string" ? title : undefined}>
         <div className="pw-modalRoot__mask" onPointerDown={onClose} />
-        <div ref={ref} className={`pw-dialog${size === "wide" ? " pw-dialog--wide" : size === "medium" ? " pw-dialog--medium" : ""}`} tabIndex={-1}>
+        <div ref={ref} className={`pw-dialog${size === "wide" ? " pw-dialog--wide" : size === "medium" ? " pw-dialog--medium" : size === "picker" ? " pw-dialog--picker" : ""}`} tabIndex={-1}>
           <div className="pw-dialog__header">
             <h2 className="pw-dialog__title">{title}</h2>
             <button className="pw-dialog__close" aria-label="Close" onClick={onClose}><Icon name="close-outline" /></button>

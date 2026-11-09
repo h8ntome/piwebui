@@ -76,6 +76,22 @@ who can open a TCP connection to it can read and drive the sessions in your allo
   allowlisted workspace roots. Directories are not scanned implicitly; `pi-web allow <dir>` is opt-in.
 - Requests outside the registered roots are refused with `forbidden: path outside registered session roots`.
 
+**Workspace folder picker**
+
+- `GET /api/v1/browse` is the one deliberately unscoped read: it is what the allowlist is built from.
+  It is **names-only** - entry names, the platform's hidden flag and whether a row is an enterable
+  directory - never contents, sizes or file bodies, and a symlink to a directory is never traversed.
+- It does not canonicalise: a level is reported under the path you asked for, so a symlinked folder
+  (common on macOS: iCloud `~/Documents`, `/tmp` → `/private/tmp`) does not silently redirect the
+  allowlist to its target.
+- `POST /api/v1/browse` creates exactly one child directory (`{path, name}`, name required to be a
+  single path segment, no separators, no `..`). It is a mutation, so it carries the same CSRF + Origin
+  fences as every other write, and it can only create where the **server process** can write.
+- Treat both verbs as part of the same boundary as the allowlist itself: whoever can reach the API can
+  list the server's filesystem by name and mkdir inside it. That is why the loopback bind, the Host
+  allowlist and the CSRF/Origin checks above are the security model here, and why a non-loopback bind
+  is documented as proxy-only.
+
 **Rendering**
 
 - Transcript markdown goes through `marked` → `DOMPurify.sanitize()` (`packages/client/src/md.ts`) with

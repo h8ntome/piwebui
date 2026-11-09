@@ -67,9 +67,14 @@ export function duration(ms: number | null | undefined): string {
   return `${m}m${String(Math.round((ms % 60_000) / 1000)).padStart(2, "0")}s`;
 }
 
+/**
+ * Last path segment, on either platform's separators. The server hands out workspace
+ * paths in the host's own shape, and a Windows host spells them `D:\\code\\proj`;
+ * splitting on "/" alone used to make that the workspace *label*.
+ */
 export function basename(p: string | null | undefined): string {
   if (!p) return "";
-  const parts = p.split("/").filter(Boolean);
+  const parts = p.split(/[\\/]+/).filter(Boolean);
   return parts[parts.length - 1] ?? p;
 }
 

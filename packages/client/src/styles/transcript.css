@@ -350,34 +350,6 @@ html[data-input-modality="touch"] .pw-turnMeta--overlay { opacity: 1; pointer-ev
 .pw-kv dt { color: var(--dsw-alias-label-tertiary); }
 .pw-kv dd { color: var(--dsw-alias-label-primary); margin: 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 
-/* directory picker */
-/* The list sizes to its content instead of reserving a tall empty box (WS-03). */
-.pw-dirpick { display: flex; flex-direction: column; min-height: 0; max-height: min(560px, calc(100dvh - 160px)); }
-.pw-dirpick__bar { display: flex; align-items: center; gap: 4px; font-size: 13px; color: var(--dsw-alias-label-secondary); min-width: 0; flex-wrap: wrap; }
-.pw-dirpick__bar button { color: inherit; cursor: pointer; border-radius: var(--dsw-radius-sm); padding: 2px 6px; }
-.pw-dirpick__bar button:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
-.pw-dirpick__error { display: flex; align-items: center; gap: 6px; margin-top: 8px; font-size: 12px; color: var(--dsw-alias-state-error-primary); }
-.pw-dirpick__chosen { margin-top: 10px; font-size: 12px; color: var(--dsw-alias-label-secondary); overflow-wrap: anywhere; }
-.pw-dirpick__list {
-  border: var(--pw-hairline, .5px) solid var(--dsw-alias-border-l2);
-  border-radius: var(--dsw-radius-md);
-  margin-top: 12px;
-  flex: 1 1 auto;
-  min-height: 120px;
-  max-height: 46vh;
-  overflow-y: auto;
-  padding: 4px;
-}
-.pw-dirpick__item {
-  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
-  border-radius: var(--dsw-radius-md); padding: 6px 8px; cursor: pointer;
-  color: var(--dsw-alias-label-primary); font-size: 14px; line-height: 20px;
-  background: none; border: none;
-}
-.pw-dirpick__item:hover, .pw-dirpick__item--active { background: var(--dsw-alias-interactive-bg-hover); }
-.pw-dirpick__item--active { box-shadow: inset 0 0 0 1px var(--dsw-alias-button-ghost-active-border); }
-.pw-dirpick__foot { display: flex; align-items: center; gap: 8px; }
-
 /* trajectory → transcript jump */
 .pw-flash { animation: pwflash 1.2s ease-out; border-radius: var(--dsw-radius-md); }
 @keyframes pwflash { 0%, 40% { background: var(--dsw-alias-interactive-bg-selected); } 100% { background: transparent; } }

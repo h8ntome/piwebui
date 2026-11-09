@@ -4,6 +4,7 @@ import { create } from "zustand";
 import { api, newOperationId, ApiError } from "./api";
 import { SseManager } from "./sse";
 import { humaniseError, isReadOnlyMode } from "./labels";
+import type { DirListing } from "./directories";
 import { basename, oneLine } from "./format";
 import { toast } from "../ui/Toast";
 
@@ -94,7 +95,8 @@ export interface SessionStatusLite {
 export interface ModelInfo { provider: string; modelId: string; name?: string; contextWindow?: number; maxTokens?: number; reasoning?: boolean; available?: boolean }
 export interface WorkspaceInfo { key: string; path: string; label: string | null }
 export interface WireImage { mimeType: "image/png" | "image/jpeg" | "image/gif" | "image/webp"; dataBase64: string; name?: string }
-export interface BrowseResult { path: string; parent: string | null; home: string; entries: { name: string; kind: "dir" | "file" }[]; truncated: boolean }
+/** One workspace-picker listing: a level, its ancestry, and the host paths of its children. */
+export type BrowseResult = DirListing;
 export interface FileView { kind: string; path: string; sizeBytes: number; text?: string; truncated?: boolean; entries?: { name: string; kind: string; sizeBytes: number | null }[] }
 
 export interface SessionView {
@@ -172,7 +174,8 @@ interface Store {
   deleteSession: (key: string) => Promise<void>;
   hiddenCount: number;
   addWorkspace: (path: string, label?: string) => Promise<string | null>;
-  browse: (path: string) => Promise<BrowseResult | null>;
+  browse: (path?: string, signal?: AbortSignal) => Promise<BrowseResult>;
+  createDirectory: (path: string, name: string) => Promise<string>;
   readFile: (workspaceKey: string, path: string) => Promise<FileView | null>;
   note: (msg: string) => void;
 }
@@ -630,9 +633,20 @@ export const useStore = create<Store>((set, get) => {
       } catch (e) { toast.error(humaniseError((e as ApiError).message)); }
     },
 
-    browse: async (path) => {
-      try { return await api.get<BrowseResult>(`/api/v1/browse?path=${encodeURIComponent(path)}`); }
-      catch (e) { toast.error(humaniseError((e as ApiError).message)); return null; }
+    /**
+     * One folder level. Failures are thrown, not toasted: the picker renders them in its
+     * own alert strip (the reference dialog does), where the reader already knows which
+     * folder they clicked. `signal` lets a superseded scan stop instead of racing the next.
+     */
+    browse: async (path, signal) => {
+      const q = path ? `?path=${encodeURIComponent(path)}` : "";
+      return await api.get<BrowseResult>(`/api/v1/browse${q}`, signal ? { signal } : undefined);
+    },
+
+    /** "New folder" in the picker: one child of `path`, named `name`; the created path comes back. */
+    createDirectory: async (path, name) => {
+      const out = await api.post<{ path: string }>("/api/v1/browse", { path, name }, newOperationId());
+      return out.path;
     },
 
     readFile: async (workspaceKey, path) => {
