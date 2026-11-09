@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Daily pi-web self-update on macOS. Replace both paths with what `which pi-web` prints
+  (Homebrew prefixes differ between Intel and Apple Silicon), then:
+
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.piwebui.update.plist
+
+  The update never restarts a running server by itself: pass --restart only if you start pi-web
+  from a LaunchAgent too (com.piwebui.server), otherwise a scheduled update would drop live
+  controllable sessions while nobody was watching.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.piwebui.update</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/pi-web</string>
+    <string>update</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <dict><key>Hour</key><integer>4</integer><key>Minute</key><integer>40</integer></dict>
+  <!-- A laptop that was asleep at 04:40 runs it on the next wake instead of skipping the day. -->
+  <key>RunAtLoad</key><true/>
+  <key>StandardOutPath</key><string>/tmp/piweb-update.log</string>
+  <key>StandardErrorPath</key><string>/tmp/piweb-update.log</string>
+</dict>
+</plist>

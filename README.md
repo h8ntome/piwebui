@@ -306,7 +306,20 @@ ExecStart=pi-web update --restart
 
 Running pi-web itself as a user service (so there is always a server to update and restart) is the
 same idea: `pi-web serve --port 4319 --bind 127.0.0.1` in a `pi-web.service` unit with
-`Restart=always`.
+`Restart=always`. Both units are in [`deploy/systemd/`](deploy/systemd).
+
+On macOS use a LaunchAgent instead — [`deploy/launchd/com.piwebui.update.plist`](deploy/launchd/com.piwebui.update.plist)
+runs the same `pi-web update` daily (and on login, for a laptop that was asleep at 04:40):
+
+```bash
+mkdir -p ~/Library/LaunchAgents
+sed "s#/opt/homebrew/bin/pi-web#$(which pi-web)#" deploy/launchd/com.piwebui.update.plist \
+  > ~/Library/LaunchAgents/com.piwebui.update.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.piwebui.update.plist
+```
+
+Leave `--restart` out of the scheduled job unless pi-web also runs as a service: an unattended
+restart would drop live controllable sessions.
 
 ## Security
 
