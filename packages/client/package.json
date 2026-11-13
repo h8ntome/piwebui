@@ -22,7 +22,7 @@
     "@types/react": "19.1.8",
     "@types/react-dom": "19.1.6",
     "@vitejs/plugin-react": "4.5.2",
-    "vite": "7.1.11"
+    "vite": "8.3.6"
   },
   "description": "pi-web web client (built into @piwebui/pi-web; not published on its own)."
 }
